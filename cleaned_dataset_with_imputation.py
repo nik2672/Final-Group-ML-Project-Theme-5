@@ -81,7 +81,7 @@ if __name__ == "__main__":
     # Save result
     imputed_dataset.to_csv(output_dataset_path, index=False)
 
-    print("input shape:", dataset.shape)
-    print("output (with imputation) shape:", imputed_dataset.shape)
-    print("total values imputed:", total_imputed)
-    print("saved file at:", output_dataset_path)
+    print("Input shape:", dataset.shape)
+    print("Output (with imputation) shape:", imputed_dataset.shape)
+    print("Total values imputed:", total_imputed)
+    print("Saved file at:", output_dataset_path)

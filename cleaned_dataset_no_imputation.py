@@ -2,9 +2,10 @@ import os
 import math
 import pandas as pd
 
-# config: update paths for your dataset
-input_dataset_path  = r"C:\swinburne\FINAL YEAR!!!\AI FOR ENIGNEERING\new\Final-Group-ML-Project-Theme-5\data\combined_raw.csv"
-output_dataset_path = r"C:\swinburne\FINAL YEAR!!!\AI FOR ENIGNEERING\new\Final-Group-ML-Project-Theme-5\data\my_clean_data_no_imputation.csv"
+_HERE = _HERE = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH = os.path.join(_HERE, 'data')
+input_dataset_path  = os.path.join(DATA_PATH, 'combined_raw.csv')
+output_dataset_path = os.path.join(DATA_PATH, 'my_clean_data_no_imputation.csv')
 
 # invalid gps values that should be removed
 bad_lat_lon_values = {0.0, 99.999, 99.9999, 999.0, 999.999}
@@ -100,11 +101,11 @@ def transform_to_clean_structure(raw_df):
 
     # reorder columns to match clean_data.csv
     final_order = [
-        "time","Convert_time","DATES","TIME","DAY","YEAR","MONTH","DATE","HOUR","MIN","SEC",
-        "latitude","longitude","svr1","svr2","svr3","svr4",
-        "upload_transfer_size_mbytes","upload_bitrate_mbits/sec",
-        "download_transfer_size_rx_mbytes","download_bitrate_rx_mbits/sec",
-        "application_data","square_id"
+        "time", "Convert_time", "DATES", "TIME", "DAY", "YEAR", "MONTH", "DATE", "HOUR", "MIN", "SEC",
+        "latitude", "longitude", "svr1", "svr2", "svr3", "svr4",
+        "upload_transfer_size_mbytes", "upload_bitrate_mbits/sec",
+        "download_transfer_size_rx_mbytes", "download_bitrate_rx_mbits/sec",
+        "application_data", "square_id"
     ]
     return cleaned[final_order]
 
@@ -113,6 +114,6 @@ if __name__ == "__main__":
     raw_dataset = pd.read_csv(input_dataset_path, low_memory=False)
     final_clean_dataset = transform_to_clean_structure(raw_dataset)
     final_clean_dataset.to_csv(output_dataset_path, index=False)
-    print("raw input shape:", raw_dataset.shape)
-    print("output clean shape:", final_clean_dataset.shape)
-    print("saved file at:", output_dataset_path)
+    print("Raw input shape:", raw_dataset.shape)
+    print("Output clean shape:", final_clean_dataset.shape)
+    print("Saved file at:", output_dataset_path)
