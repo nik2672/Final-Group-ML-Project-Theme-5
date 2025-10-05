@@ -5,7 +5,7 @@ import pandas as pd
 _HERE = _HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(_HERE, 'data')
 input_dataset_path  = os.path.join(DATA_PATH, 'combined_raw.csv')
-output_dataset_path = os.path.join(DATA_PATH, 'my_clean_data_no_imputation.csv')
+output_dataset_path = os.path.join(DATA_PATH, 'processed_data_no_imputation.csv')
 
 # invalid gps values that should be removed
 bad_lat_lon_values = {0.0, 99.999, 99.9999, 999.0, 999.999}
