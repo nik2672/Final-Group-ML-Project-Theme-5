@@ -69,14 +69,51 @@ if __name__ == "__main__":
     # Load the previously cleaned dataset
     dataset = pd.read_csv(input_dataset_path, low_memory=False)
 
-    # Drop completely empty columns first
-    dataset = drop_empty_columns(dataset)
+    # Process data by day
+    day_column = None
+    for col in ['DAY', 'DATES', 'DATE', 'day', 'date']:
+        if col in dataset.columns:
+            day_column = col
+            break
 
-    # Impute missing values
-    imputed_dataset, total_imputed = impute_dataset(dataset)
+    if day_column:
+        print(f"Processing data by day using column: {day_column}")
+        unique_days = dataset[day_column].unique()
+        print(f"Number of unique days: {len(unique_days)}")
 
-    # Drop constant columns
-    imputed_dataset = remove_constant_columns(imputed_dataset)
+        # Process each day separately
+        daily_imputed = []
+        total_imputed_all = 0
+
+        for day in unique_days:
+            day_data = dataset[dataset[day_column] == day].copy()
+
+            # Drop completely empty columns
+            day_data = drop_empty_columns(day_data)
+
+            # Impute missing values
+            day_imputed, day_total_imputed = impute_dataset(day_data)
+
+            # Drop constant columns
+            day_imputed = remove_constant_columns(day_imputed)
+
+            daily_imputed.append(day_imputed)
+            total_imputed_all += day_total_imputed
+            print(f"Day {day}: {len(day_data)} records, {day_total_imputed} values imputed")
+
+        # Combine all daily imputed data
+        imputed_dataset = pd.concat(daily_imputed, ignore_index=True)
+        total_imputed = total_imputed_all
+    else:
+        print("Warning: No day column found. Processing all data as single batch.")
+        # Drop completely empty columns first
+        dataset = drop_empty_columns(dataset)
+
+        # Impute missing values
+        imputed_dataset, total_imputed = impute_dataset(dataset)
+
+        # Drop constant columns
+        imputed_dataset = remove_constant_columns(imputed_dataset)
 
     # Save result
     imputed_dataset.to_csv(output_dataset_path, index=False)
