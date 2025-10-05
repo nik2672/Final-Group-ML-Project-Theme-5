@@ -112,7 +112,33 @@ def transform_to_clean_structure(raw_df):
 if __name__ == "__main__":
     os.makedirs(os.path.dirname(output_dataset_path), exist_ok=True)
     raw_dataset = pd.read_csv(input_dataset_path, low_memory=False)
-    final_clean_dataset = transform_to_clean_structure(raw_dataset)
+
+    # Process data by day
+    day_column = None
+    for col in ['DAY', 'DATES', 'DATE', 'day', 'date']:
+        if col in raw_dataset.columns:
+            day_column = col
+            break
+
+    if day_column:
+        print(f"Processing data by day using column: {day_column}")
+        unique_days = raw_dataset[day_column].unique()
+        print(f"Number of unique days: {len(unique_days)}")
+
+        # Process each day separately
+        daily_cleaned = []
+        for day in unique_days:
+            day_data = raw_dataset[raw_dataset[day_column] == day].copy()
+            cleaned_day = transform_to_clean_structure(day_data)
+            daily_cleaned.append(cleaned_day)
+            print(f"Day {day}: {len(day_data)} records -> {len(cleaned_day)} records after cleaning")
+
+        # Combine all daily cleaned data
+        final_clean_dataset = pd.concat(daily_cleaned, ignore_index=True)
+    else:
+        print("Warning: No day column found. Processing all data as single batch.")
+        final_clean_dataset = transform_to_clean_structure(raw_dataset)
+
     final_clean_dataset.to_csv(output_dataset_path, index=False)
     print("Raw input shape:", raw_dataset.shape)
     print("Output clean shape:", final_clean_dataset.shape)
