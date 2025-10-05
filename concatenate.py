@@ -13,6 +13,6 @@ print("Number of raw files:", len(all_files))
 # Combine the retrieved data files
 df_list = [pd.read_csv(file) for file in all_files]
 combined_df = pd.concat(df_list, ignore_index=True)
-output_file = os.path.join(DATA_PATH, "combined_raw.csv")
+output_file = os.path.join(DATA_PATH, "combined_raw_data.csv")
 combined_df.to_csv(output_file, index=False)
 print("Shape of the combined dataset:", combined_df.shape)
