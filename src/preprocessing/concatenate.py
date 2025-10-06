@@ -2,8 +2,10 @@ import os
 import glob
 import pandas as pd
 
-_HERE = _HERE = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(_HERE, 'data')
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# Navigate to project root, then to data folder
+PROJECT_ROOT = os.path.dirname(os.path.dirname(_HERE))
+DATA_PATH = os.path.join(PROJECT_ROOT, 'data')
 
 # Retrieve all files in the data directory
 all_files = glob.glob(os.path.join(DATA_PATH, "*.csv"))

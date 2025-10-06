@@ -4,53 +4,69 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ML project for network performance analysis using GPS-tagged latency and throughput measurements. The codebase implements a data processing pipeline that transforms raw CSV files into ML-ready datasets through concatenation, cleaning, imputation, and quality assurance steps.
+ML project for 5G network performance analysis using GPS-tagged latency and throughput measurements. The codebase implements a data processing pipeline that transforms raw CSV files into ML-ready datasets through concatenation, cleaning, imputation, and feature engineering.
+
+## Project Structure
+
+```
+├── src/
+│   ├── preprocessing/     # Data preprocessing pipeline
+│   └── features/         # Feature engineering
+├── notebooks/            # Jupyter notebooks for analysis/EDA
+├── docs/                # Project documentation
+└── data/               # Data files (gitignored)
+```
 
 ## Data Processing Pipeline
 
 The pipeline must be executed in this specific order:
 
-1. **Raw data concatenation** (`concatenate.py`)
+1. **Raw data concatenation** (`src/preprocessing/concatenate.py`)
    - Combines multiple CSV files from `data/` directory
-   - Excludes any `clean_data.csv` files
+   - Creates `day_id` from Year-Month-Date columns
+   - Processes data by day (as required by assignment)
    - Outputs: `data/combined_raw.csv`
 
-2. **Data cleaning** (`cleaned_dataset_no_imputation.py`)
+2. **Data cleaning** (`src/preprocessing/cleaned_dataset_no_imputation.py`)
    - Standardizes column schema to match target format
    - Converts units (sizes to MB, bitrates to Mbps)
    - Filters invalid GPS coordinates (removes values like 0.0, 99.999, 999.0)
+   - Processes by day using `day_id`
    - Input: `data/combined_raw.csv`
-   - Output: `data/my_clean_data_no_imputation.csv`
+   - Output: `data/processed_data_no_imputation.csv`
 
-3. **Imputation** (`cleaned_dataset_with_imputation.py`)
+3. **Imputation** (`src/preprocessing/cleaned_dataset_with_imputation.py`)
    - Drops completely empty columns
    - Fills numeric columns with median
    - Fills categorical columns with "Unknown"
    - Removes constant columns
-   - Input: `data/my_clean_data_no_imputation.csv`
-   - Output: `data/my_clean_data_with_imputation.csv`
+   - Processes by day using `day_id`
+   - Input: `data/processed_data_no_imputation.csv`
+   - Output: `data/processed_data_with_imputation.csv`
 
-4. **Quality assurance** (`data_assurance.ipynb`)
-   - Validates GPS ranges, data types, missing values
-   - Detects and removes duplicates
-   - Identifies outliers using z-scores
-   - Input: `data/my_clean_data_with_imputation.csv`
-   - Output: `data/my_clean_data_after_assurance.csv` (final ML-ready dataset)
+4. **Feature Engineering** (`src/features/feature_engineering.py`)
+   - Extracts temporal, spatial, and network performance features
+   - Creates zone-level and day-level aggregations
+   - Outputs 3 files optimized for different ML tasks
+   - Input: `data/my_clean_data_after_assurance.csv`
 
 ## Running the Pipeline
 
 ```bash
 # Step 1: Concatenate raw data files
-python concatenate.py
+python src/preprocessing/concatenate.py
 
 # Step 2: Clean and standardize data
-python cleaned_dataset_no_imputation.py
+python src/preprocessing/cleaned_dataset_no_imputation.py
 
 # Step 3: Impute missing values
-python cleaned_dataset_with_imputation.py
+python src/preprocessing/cleaned_dataset_with_imputation.py
 
-# Step 4: Run quality assurance (Jupyter notebook)
-jupyter notebook data_assurance.ipynb
+# Step 4: Feature engineering
+python src/features/feature_engineering.py
+
+# Step 5: Quality assurance (optional - Jupyter notebook)
+jupyter notebook notebooks/data_assurance.ipynb
 ```
 
 ## Dataset Schema

@@ -3,7 +3,9 @@ import pandas as pd
 from sklearn.impute import SimpleImputer
 
 # Config paths
-data_folder = os.path.join(os.path.dirname(__file__), "data")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(_HERE))
+data_folder = os.path.join(PROJECT_ROOT, "data")
 input_filename = "processed_data_no_imputation.csv"
 output_filename = "processed_data_with_imputation.csv"
 
