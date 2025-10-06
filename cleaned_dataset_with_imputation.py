@@ -4,8 +4,8 @@ from sklearn.impute import SimpleImputer
 
 # Config paths
 data_folder = os.path.join(os.path.dirname(__file__), "data")
-input_filename = "my_clean_data_no_imputation.csv"
-output_filename = "my_clean_data_with_imputation.csv"
+input_filename = "processed_data_no_imputation.csv"
+output_filename = "processed_data_with_imputation.csv"
 
 input_dataset_path = os.path.join(data_folder, input_filename)
 output_dataset_path = os.path.join(data_folder, output_filename)
