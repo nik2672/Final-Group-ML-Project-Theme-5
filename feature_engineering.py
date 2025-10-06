@@ -26,8 +26,10 @@ def extract_temporal_features(df):
                                     include_lowest=True)
         df['is_peak_hours'] = df['HOUR'].apply(lambda x: 1 if 7 <= x <= 9 or 17 <= x <= 19 else 0)
 
-    # Day of week if available
-    if 'DAY' in df.columns:
+    # Day of week if available (Day column contains Mon/Tue/etc)
+    if 'Day' in df.columns:
+        df['day_of_week'] = df['Day']
+    elif 'DAY' in df.columns:
         df['day_of_week'] = df['DAY']
 
     return df
@@ -220,10 +222,17 @@ def create_forecasting_features(df):
     forecasting_features = pd.DataFrame()
 
     # Temporal features
-    if 'HOUR' in df.columns:
+    if 'hour' in df.columns:
+        forecasting_features['hour'] = df['hour']
+    elif 'HOUR' in df.columns:
         forecasting_features['hour'] = df['HOUR']
-    if 'DAY' in df.columns:
+
+    if 'day_id' in df.columns:
+        forecasting_features['day_id'] = df['day_id']
+    elif 'DAY' in df.columns:
         forecasting_features['day'] = df['DAY']
+    elif 'Day' in df.columns:
+        forecasting_features['day'] = df['Day']
     if 'is_peak_hours' in df.columns:
         forecasting_features['is_peak_hours'] = df['is_peak_hours']
 
@@ -241,8 +250,14 @@ def create_forecasting_features(df):
 
     # Historical features (lag features)
     # Sort by time first if possible
-    if 'HOUR' in df.columns and 'square_id' in df.columns:
-        df_sorted = df.sort_values(['square_id', 'DAY', 'HOUR'] if 'DAY' in df.columns else ['square_id', 'HOUR'])
+    hour_col = 'hour' if 'hour' in df.columns else 'HOUR' if 'HOUR' in df.columns else None
+    day_col = 'day_id' if 'day_id' in df.columns else 'DAY' if 'DAY' in df.columns else 'Day' if 'Day' in df.columns else None
+
+    if hour_col and 'square_id' in df.columns:
+        if day_col:
+            df_sorted = df.sort_values(['square_id', day_col, hour_col])
+        else:
+            df_sorted = df.sort_values(['square_id', hour_col])
 
         # Create lag features (previous hour values)
         for col in ['avg_latency', 'upload_bitrate_mbits/sec', 'download_bitrate_rx_mbits/sec']:
@@ -270,12 +285,14 @@ if __name__ == "__main__":
     df = extract_network_performance_features(df)
     df = extract_spatial_features(df)
 
-    # Determine which day column to use
-    day_column = None
-    for col in ['DAY', 'DATES', 'DATE', 'day', 'date']:
-        if col in df.columns:
-            day_column = col
-            break
+    # Use day_id if available, otherwise try to find day column
+    day_column = 'day_id' if 'day_id' in df.columns else None
+
+    if not day_column:
+        for col in ['DAY', 'Day', 'DATES', 'DATE', 'Date', 'day', 'date']:
+            if col in df.columns:
+                day_column = col
+                break
 
     if day_column:
         df = create_temporal_aggregations(df, day_column=day_column)

@@ -69,16 +69,10 @@ if __name__ == "__main__":
     # Load the previously cleaned dataset
     dataset = pd.read_csv(input_dataset_path, low_memory=False)
 
-    # Process data by day
-    day_column = None
-    for col in ['DAY', 'DATES', 'DATE', 'day', 'date']:
-        if col in dataset.columns:
-            day_column = col
-            break
-
-    if day_column:
-        print(f"Processing data by day using column: {day_column}")
-        unique_days = dataset[day_column].unique()
+    # Process data by day using day_id if available
+    if 'day_id' in dataset.columns:
+        print(f"Processing data by day using day_id column")
+        unique_days = sorted(dataset['day_id'].unique())
         print(f"Number of unique days: {len(unique_days)}")
 
         # Process each day separately
@@ -86,7 +80,7 @@ if __name__ == "__main__":
         total_imputed_all = 0
 
         for day in unique_days:
-            day_data = dataset[dataset[day_column] == day].copy()
+            day_data = dataset[dataset['day_id'] == day].copy()
 
             # Drop completely empty columns
             day_data = drop_empty_columns(day_data)
@@ -105,7 +99,7 @@ if __name__ == "__main__":
         imputed_dataset = pd.concat(daily_imputed, ignore_index=True)
         total_imputed = total_imputed_all
     else:
-        print("Warning: No day column found. Processing all data as single batch.")
+        print("Warning: No day_id column found. Processing all data as single batch.")
         # Drop completely empty columns first
         dataset = drop_empty_columns(dataset)
 
