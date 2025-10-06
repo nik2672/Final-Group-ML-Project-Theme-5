@@ -5,7 +5,9 @@ from pathlib import Path
 
 # Config paths
 _HERE = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(_HERE, 'data')
+# Navigate to project root, then to data folder
+PROJECT_ROOT = os.path.dirname(os.path.dirname(_HERE))
+DATA_PATH = os.path.join(PROJECT_ROOT, 'data')
 input_dataset_path = os.path.join(DATA_PATH, 'my_clean_data_after_assurance.csv')
 output_dataset_path = os.path.join(DATA_PATH, 'features_engineered.csv')
 
