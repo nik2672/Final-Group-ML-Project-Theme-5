@@ -60,7 +60,7 @@ def transform_to_clean_structure(raw_df):
     cleaned = pd.DataFrame()
 
     # copy over time related fields if present
-    for column in ["time","Convert_time","DATES","TIME","DAY","YEAR","MONTH","DATE","HOUR","MIN","SEC"]:
+    for column in ["time","day_id","Convert_time","DATES","TIME","DAY","Day","YEAR","Year","MONTH","Month","DATE","Date","HOUR","hour","MIN","min","SEC","sec"]:
         cleaned[column] = raw_df[column] if column in raw_df.columns else pd.NA
 
     # gps
@@ -101,7 +101,7 @@ def transform_to_clean_structure(raw_df):
 
     # reorder columns to match clean_data.csv
     final_order = [
-        "time", "Convert_time", "DATES", "TIME", "DAY", "YEAR", "MONTH", "DATE", "HOUR", "MIN", "SEC",
+        "time", "day_id", "Convert_time", "DATES", "TIME", "DAY", "Day", "YEAR", "Year", "MONTH", "Month", "DATE", "Date", "HOUR", "hour", "MIN", "min", "SEC", "sec",
         "latitude", "longitude", "svr1", "svr2", "svr3", "svr4",
         "upload_transfer_size_mbytes", "upload_bitrate_mbits/sec",
         "download_transfer_size_rx_mbytes", "download_bitrate_rx_mbits/sec",
@@ -113,22 +113,16 @@ if __name__ == "__main__":
     os.makedirs(os.path.dirname(output_dataset_path), exist_ok=True)
     raw_dataset = pd.read_csv(input_dataset_path, low_memory=False)
 
-    # Process data by day
-    day_column = None
-    for col in ['DAY', 'DATES', 'DATE', 'day', 'date']:
-        if col in raw_dataset.columns:
-            day_column = col
-            break
-
-    if day_column:
-        print(f"Processing data by day using column: {day_column}")
-        unique_days = raw_dataset[day_column].unique()
+    # Process data by day using day_id if available
+    if 'day_id' in raw_dataset.columns:
+        print(f"Processing data by day using day_id column")
+        unique_days = sorted(raw_dataset['day_id'].unique())
         print(f"Number of unique days: {len(unique_days)}")
 
         # Process each day separately
         daily_cleaned = []
         for day in unique_days:
-            day_data = raw_dataset[raw_dataset[day_column] == day].copy()
+            day_data = raw_dataset[raw_dataset['day_id'] == day].copy()
             cleaned_day = transform_to_clean_structure(day_data)
             daily_cleaned.append(cleaned_day)
             print(f"Day {day}: {len(day_data)} records -> {len(cleaned_day)} records after cleaning")
@@ -136,7 +130,7 @@ if __name__ == "__main__":
         # Combine all daily cleaned data
         final_clean_dataset = pd.concat(daily_cleaned, ignore_index=True)
     else:
-        print("Warning: No day column found. Processing all data as single batch.")
+        print("Warning: No day_id column found. Processing all data as single batch.")
         final_clean_dataset = transform_to_clean_structure(raw_dataset)
 
     final_clean_dataset.to_csv(output_dataset_path, index=False)
