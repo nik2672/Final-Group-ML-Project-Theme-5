@@ -6,8 +6,8 @@ from sklearn.impute import SimpleImputer
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(_HERE))
 data_folder = os.path.join(PROJECT_ROOT, "data")
-input_filename = "processed_data_no_imputation.csv"
-output_filename = "processed_data_with_imputation.csv"
+input_filename = "my_clean_data_no_imputation.csv"
+output_filename = "my_clean_data_with_imputation.csv"
 
 input_dataset_path = os.path.join(data_folder, input_filename)
 output_dataset_path = os.path.join(data_folder, output_filename)
@@ -23,7 +23,7 @@ def drop_empty_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def impute_dataset(df: pd.DataFrame) -> (pd.DataFrame, int):
+def impute_dataset(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     # Perform imputation:
         # Median for numeric columns
         # 'Unknown' for categorical columns
@@ -57,11 +57,23 @@ def impute_dataset(df: pd.DataFrame) -> (pd.DataFrame, int):
 def remove_constant_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     # Drop columns where all values are the same (constant)
+    # But preserve important identifier columns like day_id
+    important_cols = ['day_id', 'time', 'square_id']  # columns to always keep
+    
     before_cols = df.shape[1]
-    df = df.loc[:, (df != df.iloc[0]).any()]
+    
+    # Get mask for non-constant columns
+    non_constant_mask = (df != df.iloc[0]).any()
+    
+    # Force keep important columns even if they appear constant in this subset
+    for col in important_cols:
+        if col in df.columns:
+            non_constant_mask[col] = True
+    
+    df = df.loc[:, non_constant_mask]
     after_cols = df.shape[1]
 
-    print(f"Dropped {before_cols - after_cols} constant columns")
+    print(f"Dropped {before_cols - after_cols} constant columns (preserved important identifiers)")
 
     return df
 
