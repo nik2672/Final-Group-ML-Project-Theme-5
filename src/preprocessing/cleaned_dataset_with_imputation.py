@@ -23,6 +23,21 @@ def drop_empty_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+def drop_duplicate_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop duplicate rows to avoid redundant data and improve processing efficiency."""
+    
+    before_rows = len(df)
+    df = df.drop_duplicates().reset_index(drop=True)
+    after_rows = len(df)
+    
+    duplicates_removed = before_rows - after_rows
+    if duplicates_removed > 0:
+        print(f"Dropped {duplicates_removed:,} duplicate rows ({duplicates_removed/before_rows*100:.2f}%)")
+    else:
+        print("No duplicate rows found")
+    
+    return df
+
 def impute_dataset(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     # Perform imputation:
         # Median for numeric columns
@@ -82,6 +97,9 @@ if __name__ == "__main__":
 
     # Load the previously cleaned dataset
     dataset = pd.read_csv(input_dataset_path, low_memory=False)
+    
+    # Remove duplicate rows first (before any other processing)
+    dataset = drop_duplicate_rows(dataset)
 
     # Process data by day using day_id if available
     if 'day_id' in dataset.columns:
