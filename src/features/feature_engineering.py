@@ -2,37 +2,44 @@ import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
+from tqdm import tqdm
 
 # Config paths
 _HERE = os.path.dirname(os.path.abspath(__file__))
 # Navigate to project root, then to data folder
 PROJECT_ROOT = os.path.dirname(os.path.dirname(_HERE))
 DATA_PATH = os.path.join(PROJECT_ROOT, 'data')
-input_dataset_path = os.path.join(DATA_PATH, 'my_clean_data_after_assurance.csv')
+input_dataset_path = os.path.join(DATA_PATH, 'my_clean_data_with_imputation.csv')
 output_dataset_path = os.path.join(DATA_PATH, 'features_engineered.csv')
 
 def extract_temporal_features(df):
     """Extract temporal features from time columns."""
     print("Extracting temporal features...")
 
-    # Create datetime column if not exists
-    if 'HOUR' in df.columns and 'MIN' in df.columns:
-        df['hour_of_day'] = df['HOUR']
-        df['minute'] = df['MIN']
+    # Handle both uppercase and lowercase column names
+    hour_col = 'HOUR' if 'HOUR' in df.columns else 'hour' if 'hour' in df.columns else None
+    min_col = 'MIN' if 'MIN' in df.columns else 'min' if 'min' in df.columns else None
+
+    # Create datetime features
+    if hour_col and min_col:
+        df['hour_of_day'] = df[hour_col]
+        df['minute'] = df[min_col]
 
     # Time of day categories
-    if 'HOUR' in df.columns:
-        df['time_of_day'] = pd.cut(df['HOUR'],
+    if hour_col:
+        df['time_of_day'] = pd.cut(df[hour_col],
                                     bins=[0, 6, 12, 18, 24],
                                     labels=['night', 'morning', 'afternoon', 'evening'],
                                     include_lowest=True)
-        df['is_peak_hours'] = df['HOUR'].apply(lambda x: 1 if 7 <= x <= 9 or 17 <= x <= 19 else 0)
+        df['is_peak_hours'] = df[hour_col].apply(lambda x: 1 if 7 <= x <= 9 or 17 <= x <= 19 else 0)
 
-    # Day of week if available (Day column contains Mon/Tue/etc)
+    # Day of week if available
     if 'Day' in df.columns:
         df['day_of_week'] = df['Day']
     elif 'DAY' in df.columns:
         df['day_of_week'] = df['DAY']
+    elif 'day_id' in df.columns:
+        df['day_of_week'] = df['day_id']
 
     return df
 
@@ -101,7 +108,7 @@ def create_zone_aggregations(df):
     latency_cols = ['svr1', 'svr2', 'svr3', 'svr4']
     available_latency = [col for col in latency_cols if col in df.columns]
 
-    for zone in df['square_id'].unique():
+    for zone in tqdm(df['square_id'].unique(), desc="Processing zones"):
         if pd.isna(zone):
             continue
 
@@ -151,7 +158,7 @@ def create_temporal_aggregations(df, day_column='DAY'):
     latency_cols = ['svr1', 'svr2', 'svr3', 'svr4']
     available_latency = [col for col in latency_cols if col in df.columns]
 
-    for day in df[day_column].unique():
+    for day in tqdm(df[day_column].unique(), desc="Processing days"):
         if pd.isna(day):
             continue
 
@@ -223,11 +230,10 @@ def create_forecasting_features(df):
 
     forecasting_features = pd.DataFrame()
 
-    # Temporal features
-    if 'hour' in df.columns:
-        forecasting_features['hour'] = df['hour']
-    elif 'HOUR' in df.columns:
-        forecasting_features['hour'] = df['HOUR']
+    # Temporal features (handle both cases)
+    hour_col = 'HOUR' if 'HOUR' in df.columns else 'hour' if 'hour' in df.columns else None
+    if hour_col:
+        forecasting_features['hour'] = df[hour_col]
 
     if 'day_id' in df.columns:
         forecasting_features['day_id'] = df['day_id']
@@ -252,14 +258,14 @@ def create_forecasting_features(df):
 
     # Historical features (lag features)
     # Sort by time first if possible
-    hour_col = 'hour' if 'hour' in df.columns else 'HOUR' if 'HOUR' in df.columns else None
+    hour_col_lag = 'hour' if 'hour' in df.columns else 'HOUR' if 'HOUR' in df.columns else None
     day_col = 'day_id' if 'day_id' in df.columns else 'DAY' if 'DAY' in df.columns else 'Day' if 'Day' in df.columns else None
 
-    if hour_col and 'square_id' in df.columns:
+    if hour_col_lag and 'square_id' in df.columns:
         if day_col:
-            df_sorted = df.sort_values(['square_id', day_col, hour_col])
+            df_sorted = df.sort_values(['square_id', day_col, hour_col_lag])
         else:
-            df_sorted = df.sort_values(['square_id', hour_col])
+            df_sorted = df.sort_values(['square_id', hour_col_lag])
 
         # Create lag features (previous hour values)
         for col in ['avg_latency', 'upload_bitrate_mbits/sec', 'download_bitrate_rx_mbits/sec']:
