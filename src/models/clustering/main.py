@@ -304,8 +304,8 @@ def main():
                      feature_names, 'kmeans_clusters.png')
     analyze_clusters(df_valid, kmeans_labels, cluster_type='kmeans')
 
-    # 3. DBSCAN
-    dbscan_model, dbscan_labels = run_dbscan(X_scaled, eps=0.5, min_samples=10)
+    # 3. DBSCAN (optimized parameters for zone-level data)
+    dbscan_model, dbscan_labels = run_dbscan(X_scaled, eps=1.5, min_samples=5)
     plot_clusters_2d(X_scaled, dbscan_labels, 'DBSCAN Clustering',
                      feature_names, 'dbscan_clusters.png')
     analyze_clusters(df_valid, dbscan_labels, cluster_type='dbscan')
