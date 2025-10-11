@@ -1,41 +1,41 @@
 """
-This program analyses 5G network performance data to find natural groups of similar areas.
+This program analyzes 5G network performance data to identify natural groups of similar geographic areas.
 
-It's like sorting cities into groups based on their internet speed and reliability:
-- Fast, reliable areas (good coverage zones)
-- Slow, unreliable areas (poor coverage zones)  
-- Mixed performance areas (average zones)
+The analysis categorizes network zones based on performance characteristics:
+- High-performance areas (optimal coverage zones)
+- Low-performance areas (suboptimal coverage zones)  
+- Mixed performance areas (moderate coverage zones)
 
-i used two different methods to find these groups:
-1. Birch: Fast method that builds a tree-like structure to organize similar data points
-2. OPTICS: Smart method that finds clusters of different sizes and identifies outliers
+Two clustering algorithms are implemented:
+1. Birch: Memory-efficient hierarchical clustering with tree-based data organization
+2. OPTICS: Density-based clustering that identifies clusters of varying sizes and outliers
 
-This helps telecom companies understand where to improve their 5G networks.
+This analysis enables telecom operators to optimize 5G network infrastructure deployment.
 """
 
 # Import required libraries
 import os                          # For file and folder operations
-import platform                    # To detect what type of computer we're using
+import platform                    # For system architecture detection
 import numpy as np                 # For mathematical operations on large datasets
 import pandas as pd                # For handling spreadsheet-like data
 import matplotlib.pyplot as plt    # For creating charts and graphs
 from sklearn.preprocessing import StandardScaler         # To normalize data (make all numbers comparable)
-from sklearn.metrics import silhouette_score, davies_bouldin_score  # To measure clustering quality
-from sklearn.cluster import Birch, OPTICS              # The two clustering algorithms we'll use
-import multiprocessing            # To use multiple CPU cores for faster processing
+from sklearn.metrics import silhouette_score, davies_bouldin_score  # For clustering quality evaluation
+from sklearn.cluster import Birch, OPTICS              # Clustering algorithm implementations
+import multiprocessing            # For parallel processing capabilities
 from tqdm import tqdm             # For progress bars in terminal
 
 # Set up file locations where data is stored and results will be saved
 _HERE = os.path.dirname(os.path.abspath(__file__))      # Current file location
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))  # Main project folder
 DATA_PATH = os.path.join(PROJECT_ROOT, 'data')         # Where input data files are stored
-OUTPUT_PATH = os.path.join(PROJECT_ROOT, 'results', 'clustering')  # Where results will be saved
+OUTPUT_PATH = os.path.join(PROJECT_ROOT, 'results', 'clustering')  # Results directory location
 
 os.makedirs(OUTPUT_PATH, exist_ok=True)  # Create results folder if it doesn't exist
 
 # Detect computer specifications for optimization
 N_CORES = multiprocessing.cpu_count()   # Count how many CPU cores are available
-IS_M_SERIES = platform.system() == 'Darwin' and platform.machine() == 'arm64'  # Check if using Apple M-series chip
+IS_M_SERIES = platform.system() == 'Darwin' and platform.machine() == 'arm64'  # Apple M-series detection
 
 if IS_M_SERIES:
     print(f"M-Series chip detected ({N_CORES} cores) - using optimized settings")
@@ -45,12 +45,14 @@ else:
 
 def load_clustering_data():
     """
-    Load the 5G network data from a file.
-
+    Load the 5G network performance data from the specified data file.
+    
+    Returns:
+        pandas.DataFrame: Network performance measurements with location and quality metrics
     """
     print("\nLoading 5G network performance data...")
     
-    # where to find our data file
+    # Define data file location
     input_path = os.path.join(DATA_PATH, 'features_for_clustering.csv')
 
     # Check if the data file actually exists
@@ -68,16 +70,21 @@ def load_clustering_data():
 
 def prepare_features(df):
     """
-    Prepare the data for analysis by selecting important measurements and making them comparable.
+    Prepare the data for analysis by selecting relevant features and standardizing their scales.
     
-    This is like choosing which columns from our spreadsheet are most important for grouping
-    similar network areas together, then making sure all numbers are on the same scale
-    (like converting everything to the same units).
+    Performs feature selection and normalization to ensure comparable measurement scales
+    across different network performance metrics for effective clustering analysis.
+    
+    Args:
+        df (pandas.DataFrame): Raw network performance data
+        
+    Returns:
+        tuple: Standardized features, feature names, scaler object, processed dataframe
     """
     print("\nPreparing data for clustering analysis...")
     
-    # Zone-level aggregation (same approach as your teammate)
-    # This reduces 2.4M samples to much smaller number of zones for faster processing
+    # Zone-level aggregation (consistent with team approach)
+    # This reduces 2.4M samples to aggregated zones for efficient processing
     if 'square_id' in df.columns:
         print(f"Aggregating {len(df):,} measurements by zone (square_id)...")
         zone_agg = df.groupby('square_id').agg({
@@ -94,7 +101,7 @@ def prepare_features(df):
         print(f"Reduced to {len(zone_agg):,} zones (much faster processing!)")
         df = zone_agg
     
-    # Use the same features as your teammate's analysis for consistency
+    # Use consistent features for team analysis compatibility
     feature_cols = [
         'latitude', 'longitude',
         'avg_latency', 'std_latency', 'total_throughput',
@@ -102,18 +109,18 @@ def prepare_features(df):
     ]
     feature_cols = [col for col in feature_cols if col in df.columns]
 
-    # If some expected measurements are missing, use whatever numeric data we have
+    # If expected measurements are missing, use available numeric data
     if len(feature_cols) < 3:
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         feature_cols = numeric_cols[:8]  # Take the first 8 numeric measurements
         
-    print(f"Using these measurements for grouping: {feature_cols}")
+    print(f"Selected features for clustering: {feature_cols}")
     
     # Extract the selected data and fill in any missing values with zeros
     X = df[feature_cols].fillna(0)
     
-    # Standardize the data (make all measurements comparable)
-    # This is like converting weights to the same unit (all in kg) so we can compare fairly
+    # Standardize the data (normalize all measurements for comparison)
+    # Converts all metrics to comparable scales for effective clustering
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
@@ -149,7 +156,7 @@ def run_birch_clustering(X, max_clusters=6):
     
     print("Testing different cluster numbers (optimized for speed)...")
     
-    # Use tqdm progress bar like your teammate
+    # Use tqdm progress bar 
     for k in tqdm(cluster_range, desc="Birch optimization"):
         # Configure Birch parameters
         birch = Birch(
@@ -198,15 +205,21 @@ def run_birch_clustering(X, max_clusters=6):
 
 def run_optics_clustering(X):
     """
-    Use the OPTICS algorithm to find natural groups in network performance data.
+    Execute OPTICS algorithm to identify natural clusters in network performance data.
     
-    OPTICS works like finding crowds in a city:
-    - It looks for areas where network locations are densely packed (similar performance)
-    - It automatically finds groups of different sizes and shapes
-    - It identifies "outliers" - locations that don't fit into any group (unusual performance)
+    OPTICS (Ordering Points To Identify Cluster Structure) provides density-based clustering:
+    - Identifies densely packed regions representing similar network performance
+    - Automatically determines cluster shapes and sizes without predetermined parameters
+    - Detects outliers representing locations with anomalous performance characteristics
     
-    Unlike Birch, OPTICS doesn't need you to tell it how many groups to find.
-    It discovers the natural patterns in the data automatically.
+    Unlike partitioning methods, OPTICS discovers natural data patterns automatically
+    without requiring specification of cluster count.
+    
+    Args:
+        X (numpy.ndarray): Standardized feature matrix
+        
+    Returns:
+        tuple: Cluster labels, fitted model, number of clusters
     """
     print("\nUsing OPTICS algorithm to discover natural performance groups...")
     
@@ -257,10 +270,15 @@ def run_optics_clustering(X):
 
 def plot_birch_results(X, birch_labels, feature_names):
     """
-    Create individual chart for Birch clustering results.
+    Generate visualization for Birch clustering results.
     
-    Shows how the Birch algorithm organized network locations into performance zones.
-    Each color represents a different zone with similar network characteristics.
+    Creates scatter plot showing network location clusters identified by Birch algorithm.
+    Each color represents a distinct performance zone with similar characteristics.
+    
+    Args:
+        X (numpy.ndarray): Standardized feature data
+        birch_labels (numpy.ndarray): Cluster assignments
+        feature_names (list): Names of features for axis labels
     """
     if birch_labels is None:
         return
@@ -288,10 +306,15 @@ def plot_birch_results(X, birch_labels, feature_names):
 
 def plot_optics_results(X, optics_labels, feature_names):
     """
-    Create individual chart for OPTICS clustering results.
+    Generate visualization for OPTICS clustering results.
     
-    Shows natural groups discovered by OPTICS algorithm, including outliers.
-    Gray dots represent outlier locations that don't fit into any natural group.
+    Creates scatter plot displaying natural clusters discovered by OPTICS algorithm.
+    Gray markers indicate outlier locations with anomalous performance patterns.
+    
+    Args:
+        X (numpy.ndarray): Standardized feature data
+        optics_labels (numpy.ndarray): Cluster assignments with outliers marked as -1
+        feature_names (list): Names of features for axis labels
     """
     if optics_labels is None:
         return
@@ -380,12 +403,14 @@ def save_optics_results(df, optics_labels):
 
 def main():
     """
-
-    1. Loads the network performance data
-    2. Prepares it for analysis
-    3. Runs two different grouping methods
-    4. Creates visualizations
-    5. Saves the results
+    Execute the complete clustering analysis pipeline.
+    
+    Process steps:
+    1. Load network performance data
+    2. Prepare features for analysis
+    3. Execute Birch and OPTICS clustering algorithms
+    4. Generate result visualizations
+    5. Save cluster assignments and analysis results
     """
     print("=" * 60)
     print("5G NETWORK PERFORMANCE ZONE ANALYSIS")
@@ -430,8 +455,8 @@ def main():
         print("=" * 60)
 
     except Exception as e:
-        print(f"\nSomething went wrong: {str(e)}")
-        print("Please check the error message above and try again.")
+        print(f"\nError occurred during analysis: {str(e)}")
+        print("Review the error message and verify data file availability.")
         raise
 
 
