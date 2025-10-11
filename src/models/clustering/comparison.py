@@ -68,7 +68,7 @@ def load_and_prepare_data():
         'zone_avg_latency', 'zone_avg_upload', 'zone_avg_download'
     ]
     feature_cols = [col for col in feature_cols if col in df.columns]
-    print(f"Using features: {feature_cols}")
+    print(f"Selected features: {feature_cols}")
     
     # Prepare features
     X = df[feature_cols].fillna(0)
