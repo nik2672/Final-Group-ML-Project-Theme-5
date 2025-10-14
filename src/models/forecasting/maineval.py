@@ -1,4 +1,5 @@
 """
+XGB Boost evaluated - R^2 ~ 30% to 80% 
 Unified Forecasting Evaluation (with tuning) for 5G performance.
 - Chronological split + leakage guards
 - Naive baseline
@@ -501,3 +502,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
