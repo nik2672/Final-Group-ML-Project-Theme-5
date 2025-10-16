@@ -40,6 +40,6 @@ if 'Year' in combined_df.columns and 'Month' in combined_df.columns and 'Date' i
 else:
     print("Warning: No day columns found. Processing all data as single batch.")
 
-output_file = os.path.join(DATA_PATH, "combined_raw.csv")
+output_file = os.path.join(DATA_PATH, "combined_raw_data.csv")
 combined_df.to_csv(output_file, index=False)
 print("Shape of the combined dataset:", combined_df.shape)
