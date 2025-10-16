@@ -1,3 +1,55 @@
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDEs
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data files
 data/
+
+# Node / React
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp/
+.pnp.js
+
+# React build
+ui/frontend/build/
+ui/frontend/.env.local
+ui/frontend/.env.development.local
+ui/frontend/.env.test.local
+ui/frontend/.env.production.local
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Results and outputs
+results/
+*.png
+*.csv
+*.pkl
+*.joblib
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Logs
+*.log
+logs/
