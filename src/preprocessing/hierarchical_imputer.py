@@ -57,7 +57,7 @@ DEFAULT_EXCLUDE_NUMERIC_COLS = {
 }
 
 
-def select_numeric_telemetry_columns(df: pd.DataFrame, extra_exclude: List[str] | None = None) -> List[str]:
+def select_numeric_telemetry_columns(df, extra_exclude):
     """Select numeric telemetry columns for imputation, excluding non-telemetry fields.
 
     Rules:
@@ -147,19 +147,14 @@ def _fill_with_level(
     return merged
 
 
-def apply_hierarchical_imputation(
-    train_df: pd.DataFrame,
-    test_df: pd.DataFrame,
-    numeric_cols: List[str],
-    date_key_col: str = 'date_key',
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def apply_hierarchical_imputation(train_df, test_df, numeric_cols, date_key_col='date_key'):
     """Impute TRAIN/TEST deterministically using TRAIN-only medians with hierarchy.
 
     Order: [square_id, date] -> [square_id] -> [date] -> global median fallback.
     """
     med_l1, med_l2, med_l3, med_global = compute_group_medians(train_df, numeric_cols, date_key_col)
 
-    def _apply(df: pd.DataFrame) -> pd.DataFrame:
+    def _apply(df):
         out = df.copy()
         # L1
         out = _fill_with_level(out, ['square_id', date_key_col], med_l1, numeric_cols)
@@ -179,11 +174,7 @@ def apply_hierarchical_imputation(
     return train_imputed, test_imputed
 
 
-def knn_refine_svr_block(
-    train_df: pd.DataFrame,
-    test_df: pd.DataFrame,
-    neighbors: int = 5,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def knn_refine_svr_block(train_df, test_df, neighbors=5):
     """Optionally refine svr1–svr4 via KNNImputer fitted on TRAIN only.
 
     If KNN is unavailable or preconditions are not met, returns inputs unchanged.
@@ -223,11 +214,7 @@ def knn_refine_svr_block(
     return train_out, test_out
 
 
-def split_train_test_by_date(
-    df: pd.DataFrame,
-    date_key_col: str = 'date_key',
-    test_fraction: float = 0.2,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def split_train_test_by_date(df, date_key_col='date_key', test_fraction=0.2):
     """Deterministically split TRAIN/TEST by unique date_key without leakage.
 
     - Sort unique dates ascending; last X% of days become TEST.
@@ -247,15 +234,7 @@ def split_train_test_by_date(
     return train_df, test_df
 
 
-def impute_leakage_safe(
-    df: pd.DataFrame,
-    date_key_col: str = 'date_key',
-    numeric_cols: List[str] | None = None,
-    extra_exclude_numeric: List[str] | None = None,
-    test_fraction: float = 0.2,
-    enable_knn_refine: bool = True,
-    knn_neighbors: int = 5,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, List[str]]:
+def impute_leakage_safe(df, date_key_col='date_key', numeric_cols=None, extra_exclude_numeric=None, test_fraction=0.2, enable_knn_refine=True, knn_neighbors=5):
     """Top-level leakage-safe imputation pipeline.
 
     Returns (train_imputed, test_imputed, full_imputed_concatenated, used_numeric_cols)
@@ -293,5 +272,3 @@ def save_imputed_dataset(
 ) -> None:
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     df.to_csv(output_path, index=False)
-
-
