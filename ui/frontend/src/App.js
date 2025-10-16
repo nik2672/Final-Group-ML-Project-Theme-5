@@ -9,18 +9,24 @@ import {
   Alert,
   CircularProgress,
   Divider,
+  LinearProgress,
 } from '@mui/material';
 import ModelSelector from './components/ModelSelector';
 import HyperparameterControls from './components/HyperparameterControls';
 import ResultsDisplay from './components/ResultsDisplay';
+import DataStatusIndicator from './components/DataStatusIndicator';
+import TargetMetricSelector from './components/TargetMetricSelector';
+import RunHistory from './components/RunHistory';
 import axios from 'axios';
 
 function App() {
   const [selectedModel, setSelectedModel] = useState('');
   const [hyperparameters, setHyperparameters] = useState({});
+  const [targetMetric, setTargetMetric] = useState('avg_latency');
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [runHistory, setRunHistory] = useState([]);
 
   const handleModelChange = (model) => {
     setSelectedModel(model);
@@ -53,8 +59,14 @@ function App() {
       const response = await axios.post('/api/run-model', {
         model: selectedModel,
         hyperparameters: hyperparameters,
+        target_metric: targetMetric,
       });
       setResults(response.data);
+
+      // Add to history
+      if (response.data.status === 'success') {
+        setRunHistory(prev => [...prev, response.data]);
+      }
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to run model. Check console for details.');
       console.error('Error running model:', err);
@@ -62,6 +74,16 @@ function App() {
       setLoading(false);
     }
   };
+
+  const handleClearHistory = () => {
+    setRunHistory([]);
+  };
+
+  const handleCompareRuns = () => {
+    alert('Comparison feature: Compare the metrics across your runs in the history table!');
+  };
+
+  const isForecastingModel = selectedModel === 'xgboost' || selectedModel === 'arima';
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
@@ -81,6 +103,8 @@ function App() {
 
           <Divider sx={{ my: 3 }} />
 
+          <DataStatusIndicator />
+
           <ModelSelector
             selectedModel={selectedModel}
             onModelChange={handleModelChange}
@@ -88,6 +112,15 @@ function App() {
 
           {selectedModel && (
             <>
+              {isForecastingModel && (
+                <Box sx={{ mt: 3 }}>
+                  <TargetMetricSelector
+                    value={targetMetric}
+                    onChange={setTargetMetric}
+                  />
+                </Box>
+              )}
+
               <Box sx={{ mt: 4 }}>
                 <HyperparameterControls
                   model={selectedModel}
@@ -105,8 +138,14 @@ function App() {
               )}
 
               {loading && (
-                <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
-                  <CircularProgress size={60} />
+                <Box sx={{ mt: 4 }}>
+                  <Typography variant="body2" color="text.secondary" align="center" sx={{ mb: 2 }}>
+                    Running {selectedModel.toUpperCase()} model... This may take 30s-2min
+                  </Typography>
+                  <LinearProgress />
+                  <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+                    <CircularProgress size={60} />
+                  </Box>
                 </Box>
               )}
 
@@ -115,6 +154,12 @@ function App() {
                   <ResultsDisplay results={results} model={selectedModel} />
                 </Box>
               )}
+
+              <RunHistory
+                history={runHistory}
+                onClear={handleClearHistory}
+                onCompare={handleCompareRuns}
+              />
             </>
           )}
         </Paper>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Typography,
@@ -8,8 +8,15 @@ import {
   CardContent,
   Divider,
   Chip,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Alert,
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ErrorIcon from '@mui/icons-material/Error';
+import OutputViewer from './OutputViewer';
 
 function ResultsDisplay({ results, model }) {
   if (!results) return null;
@@ -180,6 +187,16 @@ function ResultsDisplay({ results, model }) {
         <Box>
           {model === 'kmeans' || model === 'dbscan' ? renderClusteringResults() : renderForecastingResults()}
 
+          {results.target_metric && (
+            <Box sx={{ mt: 3 }}>
+              <Alert severity="info" variant="outlined">
+                <strong>Target Metric:</strong> {results.target_metric}
+              </Alert>
+            </Box>
+          )}
+
+          <OutputViewer outputFiles={results.output_files} model={model} />
+
           {results.execution_time && (
             <Box sx={{ mt: 4 }}>
               <Divider sx={{ mb: 2 }} />
@@ -193,12 +210,38 @@ function ResultsDisplay({ results, model }) {
 
       {results.status === 'error' && (
         <Box>
-          <Typography variant="h6" color="error" gutterBottom>
-            Error
-          </Typography>
-          <Typography variant="body1">
-            {results.message || 'An error occurred while running the model'}
-          </Typography>
+          <Alert severity="error" icon={<ErrorIcon />} sx={{ mb: 3 }}>
+            <Typography variant="h6" gutterBottom>
+              {results.error_type || 'Error'}
+            </Typography>
+            <Typography variant="body1">
+              {results.message || 'An error occurred while running the model'}
+            </Typography>
+          </Alert>
+
+          {results.stack_trace && (
+            <Accordion>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Typography>Stack Trace (for debugging)</Typography>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Box
+                  component="pre"
+                  sx={{
+                    bgcolor: 'grey.900',
+                    color: 'grey.100',
+                    p: 2,
+                    borderRadius: 1,
+                    overflow: 'auto',
+                    fontSize: '0.875rem',
+                    fontFamily: 'monospace',
+                  }}
+                >
+                  {results.stack_trace}
+                </Box>
+              </AccordionDetails>
+            </Accordion>
+          )}
         </Box>
       )}
     </Paper>

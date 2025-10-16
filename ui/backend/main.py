@@ -6,10 +6,13 @@ Executes clustering and forecasting models with user-defined hyperparameters.
 import os
 import sys
 import time
+import traceback
+import base64
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import subprocess
 
@@ -32,11 +35,40 @@ app.add_middleware(
 class ModelRequest(BaseModel):
     model: str
     hyperparameters: Dict[str, Any]
+    target_metric: Optional[str] = "avg_latency"  # For forecasting models
 
 
 @app.get("/")
 def read_root():
     return {"message": "5G ML Model Runner API", "status": "running"}
+
+
+@app.get("/api/data-status")
+def check_data_status():
+    """Check if required data files exist."""
+    clustering_path = PROJECT_ROOT / 'data' / 'features_for_clustering.csv'
+    forecasting_path = PROJECT_ROOT / 'data' / 'features_for_forecasting.csv'
+
+    return {
+        "clustering_data": clustering_path.exists(),
+        "forecasting_data": forecasting_path.exists(),
+        "clustering_path": str(clustering_path),
+        "forecasting_path": str(forecasting_path)
+    }
+
+
+@app.get("/api/results/{filename}")
+def get_result_file(filename: str):
+    """Serve result files (images, CSV)."""
+    results_dir = PROJECT_ROOT / 'results'
+
+    # Search in clustering and forecasting subdirectories
+    for subdir in ['clustering', 'forecasting']:
+        file_path = results_dir / subdir / filename
+        if file_path.exists():
+            return FileResponse(file_path)
+
+    raise HTTPException(status_code=404, detail="File not found")
 
 
 @app.post("/api/run-model")
@@ -46,6 +78,7 @@ async def run_model(request: ModelRequest):
     """
     model = request.model
     params = request.hyperparameters
+    target_metric = request.target_metric
 
     start_time = time.time()
 
@@ -55,23 +88,29 @@ async def run_model(request: ModelRequest):
         elif model == "dbscan":
             result = run_dbscan(params)
         elif model == "xgboost":
-            result = run_xgboost(params)
+            result = run_xgboost(params, target_metric)
         elif model == "arima":
-            result = run_arima(params)
+            result = run_arima(params, target_metric)
         else:
             raise HTTPException(status_code=400, detail=f"Unknown model: {model}")
 
         execution_time = time.time() - start_time
         result["execution_time"] = execution_time
         result["status"] = "success"
+        result["hyperparameters"] = params
+        result["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
         return result
 
     except Exception as e:
         execution_time = time.time() - start_time
+        error_trace = traceback.format_exc()
+
         return {
             "status": "error",
             "message": str(e),
+            "error_type": type(e).__name__,
+            "stack_trace": error_trace,
             "execution_time": execution_time
         }
 
@@ -210,7 +249,7 @@ def run_dbscan(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def run_xgboost(params: Dict[str, Any]) -> Dict[str, Any]:
+def run_xgboost(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dict[str, Any]:
     """Run XGBoost forecasting model."""
     import numpy as np
     import pandas as pd
@@ -225,7 +264,10 @@ def run_xgboost(params: Dict[str, Any]) -> Dict[str, Any]:
 
     df = pd.read_csv(data_path, low_memory=False)
 
-    target_col = 'avg_latency'
+    target_col = target_metric
+    if target_col not in df.columns:
+        raise ValueError(f"Target metric '{target_col}' not found in data. Available: {list(df.columns)}")
+
     df_clean = df.dropna(subset=[target_col])
 
     # Prepare features
@@ -268,16 +310,17 @@ def run_xgboost(params: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "model": "xgboost",
+        "target_metric": target_col,
         "metrics": {
             "mae": float(mae),
             "rmse": float(rmse),
             "r2": float(r2)
         },
-        "output_files": ["xgboost_avg_latency.png", "feature_importance_avg_latency.png"]
+        "output_files": [f"xgboost_{target_col}.png", f"feature_importance_{target_col}.png"]
     }
 
 
-def run_arima(params: Dict[str, Any]) -> Dict[str, Any]:
+def run_arima(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dict[str, Any]:
     """Run ARIMA forecasting model."""
     import numpy as np
     import pandas as pd
@@ -293,7 +336,10 @@ def run_arima(params: Dict[str, Any]) -> Dict[str, Any]:
 
     df = pd.read_csv(data_path, low_memory=False)
 
-    target_col = 'avg_latency'
+    target_col = target_metric
+    if target_col not in df.columns:
+        raise ValueError(f"Target metric '{target_col}' not found in data. Available: {list(df.columns)}")
+
     df_clean = df.dropna(subset=[target_col])
 
     # Sample data
@@ -329,13 +375,14 @@ def run_arima(params: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "model": "arima",
+        "target_metric": target_col,
         "metrics": {
             "mae": float(mae),
             "rmse": float(rmse),
             "aic": float(model_fit.aic),
             "bic": float(model_fit.bic)
         },
-        "output_files": ["arima_avg_latency.png"]
+        "output_files": [f"arima_{target_col}.png"]
     }
 
 
