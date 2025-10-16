@@ -29,7 +29,7 @@ def load_input_dataframe() -> pd.DataFrame:
     raise FileNotFoundError("No input dataset found in data/. Expected one of: processed_data_no_imputation.csv, clean_data.csv")
 
 
-def main() -> None:
+def main():
     df = load_input_dataframe()
 
     # Impute with hierarchical, leakage-safe approach.
@@ -60,5 +60,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
-
