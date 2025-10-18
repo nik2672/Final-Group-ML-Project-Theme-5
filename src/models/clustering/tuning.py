@@ -5,6 +5,13 @@ from tqdm import tqdm
 import pandas as pd
 import os
 
+try:
+    import hdbscan
+    HDBSCAN_AVAILABLE = True
+except ImportError:
+    HDBSCAN_AVAILABLE = False
+    print("HDBSCAN not available. Install with: pip install hdbscan")
+
 # Setup output folder
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
 
@@ -89,6 +96,34 @@ for min_samp in tqdm([3, 5, 10], desc="OPTICS tuning"):
             sil = silhouette_score(X, labels)
             dbi = davies_bouldin_score(X, labels)
             results.append({"Model": "OPTICS", "Param": f"min={min_samp},xi={xi}", "Silhouette": sil, "DBI": dbi})
+
+# HDBSCAN tuning
+if HDBSCAN_AVAILABLE:
+    for min_cluster_size in tqdm([5, 8, 10, 12, 15], desc="HDBSCAN tuning"):
+        for min_samples in [3, 5, 8, None]:
+            try:
+                model = hdbscan.HDBSCAN(
+                    min_cluster_size=min_cluster_size,
+                    min_samples=min_samples,
+                    cluster_selection_epsilon=0.0,
+                    cluster_selection_method="eom",
+                    core_dist_n_jobs=-1
+                )
+                labels = model.fit_predict(X)
+                n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+                
+                if n_clusters > 1:
+                    # Calculate silhouette excluding noise points
+                    mask = labels != -1
+                    if mask.sum() > 0 and len(set(labels[mask])) > 1:
+                        sil = silhouette_score(X[mask], labels[mask])
+                        dbi = davies_bouldin_score(X[mask], labels[mask])
+                        min_samp_str = "None" if min_samples is None else str(min_samples)
+                        results.append({"Model": "HDBSCAN", "Param": f"mcs={min_cluster_size},ms={min_samp_str}", "Silhouette": sil, "DBI": dbi})
+            except Exception as e:
+                print(f"HDBSCAN failed with min_cluster_size={min_cluster_size}, min_samples={min_samples}: {e}")
+else:
+    print("Skipping HDBSCAN tuning - package not available")
 
 # Create results DataFrame
 results_df = pd.DataFrame(results)

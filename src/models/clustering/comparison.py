@@ -1,6 +1,6 @@
 """
-Comprehensive 4-Algorithm Clustering Comparison for 5G Network Performance Analysis.
-Combines K-Means, DBSCAN, Birch, and OPTICS algorithms for unified comparison.
+Comprehensive 5-Algorithm Clustering Comparison for 5G Network Performance Analysis.
+Combines K-Means, DBSCAN, Birch, OPTICS, and HDBSCAN algorithms for unified comparison.
 """
 
 import os
@@ -13,6 +13,13 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score, davies_bouldin_score, adjusted_rand_score
 from tqdm import tqdm
 import multiprocessing
+
+try:
+    import hdbscan
+    HDBSCAN_AVAILABLE = True
+except ImportError:
+    HDBSCAN_AVAILABLE = False
+    print("HDBSCAN not available. Install with: pip install hdbscan")
 
 # Config paths
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -185,18 +192,52 @@ def run_optics_analysis(X):
     return labels, n_clusters, sil_score
 
 
+def run_hdbscan_analysis(X):
+    """Run HDBSCAN clustering with optimized parameters."""
+    if not HDBSCAN_AVAILABLE:
+        print("HDBSCAN clustering... ✗ Package not available")
+        return np.zeros(len(X)), 0, None
+    
+    print("HDBSCAN clustering...", end=" ")
+    
+    hdb = hdbscan.HDBSCAN(
+        min_cluster_size=8,
+        min_samples=5,
+        cluster_selection_epsilon=0.0,
+        cluster_selection_method="eom",
+        core_dist_n_jobs=-1
+    )
+    labels = hdb.fit_predict(X)
+    
+    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    n_noise = np.sum(labels == -1)
+    
+    # Calculate silhouette score (excluding noise)
+    sil_score = None
+    if n_clusters > 1:
+        mask = labels != -1
+        if np.sum(mask) > 0:
+            sil_score = silhouette_score(X[mask], labels[mask])
+    
+    score_text = f"Score: {sil_score:.3f}" if sil_score else "Score: N/A"
+    print(f"✓ {n_clusters} clusters, {n_noise} outliers, {score_text}")
+    
+    return labels, n_clusters, sil_score
+
+
 def create_comparison_visualization(X, all_labels, feature_names):
-    """Create 2x2 comparison visualization of all 4 algorithms."""
+    """Create 2x3 comparison visualization of all 5 algorithms."""
     print("Creating visualizations...", end=" ")
     
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    algorithms = ['K-Means', 'DBSCAN', 'Birch', 'OPTICS']
+    # Use 2x3 layout for 5 algorithms
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    algorithms = ['K-Means', 'DBSCAN', 'Birch', 'OPTICS', 'HDBSCAN']
     
     for i, (algo, labels) in enumerate(zip(algorithms, all_labels)):
-        row, col = i // 2, i % 2
+        row, col = i // 3, i % 3
         ax = axes[row, col]
         
-        if algo in ['DBSCAN', 'OPTICS'] and -1 in labels:
+        if algo in ['DBSCAN', 'OPTICS', 'HDBSCAN'] and -1 in labels:
             # Handle algorithms with outliers
             noise_mask = labels == -1
             cluster_mask = labels != -1
@@ -228,6 +269,9 @@ def create_comparison_visualization(X, all_labels, feature_names):
         ax.set_ylabel(feature_names[1] if len(feature_names) > 1 else 'Feature 2')
         ax.grid(True, alpha=0.3)
     
+    # Hide the unused subplot (bottom right)
+    axes[1, 2].axis('off')
+    
     plt.tight_layout()
     
     # Save comparison chart
@@ -241,11 +285,11 @@ def calculate_algorithm_similarity(all_labels):
     """Calculate Adjusted Rand Index between algorithms."""
     print("Calculating similarity matrix...", end=" ")
     
-    algorithms = ['K-Means', 'DBSCAN', 'Birch', 'OPTICS']
-    similarity_matrix = np.zeros((4, 4))
+    algorithms = ['K-Means', 'DBSCAN', 'Birch', 'OPTICS', 'HDBSCAN']
+    similarity_matrix = np.zeros((5, 5))
     
-    for i in range(4):
-        for j in range(4):
+    for i in range(5):
+        for j in range(5):
             if i == j:
                 similarity_matrix[i, j] = 1.0
             else:
@@ -257,14 +301,14 @@ def calculate_algorithm_similarity(all_labels):
     im = ax.imshow(similarity_matrix, cmap='YlOrRd', vmin=0, vmax=1)
     
     # Add labels and values
-    ax.set_xticks(range(4))
-    ax.set_yticks(range(4))
-    ax.set_xticklabels(algorithms)
+    ax.set_xticks(range(5))
+    ax.set_yticks(range(5))
+    ax.set_xticklabels(algorithms, rotation=45)
     ax.set_yticklabels(algorithms)
     
     # Add text annotations
-    for i in range(4):
-        for j in range(4):
+    for i in range(5):
+        for j in range(5):
             text = ax.text(j, i, f'{similarity_matrix[i, j]:.3f}',
                           ha="center", va="center", color="black", fontweight='bold')
     
@@ -286,7 +330,7 @@ def save_combined_results(df, all_labels):
     print("Saving combined results...", end=" ")
     
     results_df = df.copy()
-    algorithms = ['kmeans', 'dbscan', 'birch', 'optics']
+    algorithms = ['kmeans', 'dbscan', 'birch', 'optics', 'hdbscan']
     
     for algo, labels in zip(algorithms, all_labels):
         results_df[f'{algo}_cluster'] = labels
@@ -300,15 +344,15 @@ def create_performance_summary_chart(all_metrics):
     """Create performance summary chart as PNG for assignment requirements."""
     print("Creating performance summary chart...", end=" ")
     
-    algorithms = ['K-Means', 'DBSCAN', 'Birch', 'OPTICS']
+    algorithms = ['K-Means', 'DBSCAN', 'Birch', 'OPTICS', 'HDBSCAN']
     clusters = [metrics[0] for metrics in all_metrics]
     scores = [metrics[1] for metrics in all_metrics]
     
     # Create figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
     
     # Left chart: Number of clusters
-    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4']
+    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFA07A']
     bars1 = ax1.bar(algorithms, clusters, color=colors, alpha=0.8)
     ax1.set_title('Number of Clusters Found', fontweight='bold', fontsize=14)
     ax1.set_ylabel('Number of Clusters', fontweight='bold')
@@ -335,10 +379,11 @@ def create_performance_summary_chart(all_metrics):
     
     # Add summary statistics text box
     summary_text = f"""Algorithm Performance Ranking:
-1. OPTICS: {scores[3]:.3f} (Best Quality)
-2. DBSCAN: {scores[1]:.3f} (Good Outlier Detection) 
-3. Birch: {scores[2]:.3f} (Balanced Approach)
-4. K-Means: {scores[0]:.3f} (Simple Partitioning)
+1. HDBSCAN: {scores[4]:.3f} (Hierarchical Density-Based)
+2. OPTICS: {scores[3]:.3f} (Density Ordering)
+3. DBSCAN: {scores[1]:.3f} (Good Outlier Detection) 
+4. Birch: {scores[2]:.3f} (Balanced Approach)
+5. K-Means: {scores[0]:.3f} (Simple Partitioning)
 
 Total Zones Analyzed: 299
 Data Reduction: 2.4M → 299 zones (99.99%)"""
@@ -359,10 +404,11 @@ Data Reduction: 2.4M → 299 zones (99.99%)"""
 def generate_summary_report(all_metrics):
     """Generate comprehensive summary report."""
     print("\n" + "=" * 80)
-    print("COMPREHENSIVE 4-ALGORITHM CLUSTERING COMPARISON REPORT")
+    algorithm_count = "5-ALGORITHM" if HDBSCAN_AVAILABLE else "4-ALGORITHM"
+    print(f"COMPREHENSIVE {algorithm_count} CLUSTERING COMPARISON REPORT")
     print("=" * 80)
     
-    algorithms = ['K-Means', 'DBSCAN', 'Birch', 'OPTICS']
+    algorithms = ['K-Means', 'DBSCAN', 'Birch', 'OPTICS', 'HDBSCAN']
     
     print("\nALGORITHM PERFORMANCE SUMMARY:")
     print("-" * 50)
@@ -377,10 +423,13 @@ def generate_summary_report(all_metrics):
     print("DBSCAN    : Density-based, identifies outliers")  
     print("Birch     : Memory efficient, hierarchical structure")
     print("OPTICS    : Natural clusters, automatic parameter selection")
+    if HDBSCAN_AVAILABLE:
+        print("HDBSCAN   : Hierarchical density-based, robust outlier detection")
     
     print(f"\nOUTPUT FILES GENERATED:")
     print("-" * 50)
-    print("• all_algorithms_comparison.png     - 2x2 visual comparison")
+    comparison_desc = "2x3 visual comparison (5 algorithms)" if HDBSCAN_AVAILABLE else "2x2 visual comparison (4 algorithms)"
+    print(f"• all_algorithms_comparison.png     - {comparison_desc}")
     print("• algorithm_similarity_matrix.png   - Algorithm similarity heatmap") 
     print("• performance_summary.png           - Performance summary chart")
     print("• all_algorithms_results.csv        - Combined clustering results")
@@ -391,7 +440,8 @@ def generate_summary_report(all_metrics):
 def main():
     """Main execution function."""
     print("=" * 80)
-    print("5G NETWORK PERFORMANCE: 4-ALGORITHM CLUSTERING COMPARISON")
+    algorithm_count = "5-ALGORITHM" if HDBSCAN_AVAILABLE else "4-ALGORITHM"
+    print(f"5G NETWORK PERFORMANCE: {algorithm_count} CLUSTERING COMPARISON")
     if IS_M_SERIES:
         print(f"M-Series Optimized Mode ({N_CORES} cores)")
     else:
@@ -401,19 +451,21 @@ def main():
     # Load and prepare data
     X_scaled, feature_names, df = load_and_prepare_data()
     
-    # Run all 4 algorithms
+    # Run all algorithms
     kmeans_labels, kmeans_clusters, kmeans_score = run_kmeans_analysis(X_scaled)
     dbscan_labels, dbscan_clusters, dbscan_score = run_dbscan_analysis(X_scaled)
     birch_labels, birch_clusters, birch_score = run_birch_analysis(X_scaled)
     optics_labels, optics_clusters, optics_score = run_optics_analysis(X_scaled)
+    hdbscan_labels, hdbscan_clusters, hdbscan_score = run_hdbscan_analysis(X_scaled)
     
     # Collect all results
-    all_labels = [kmeans_labels, dbscan_labels, birch_labels, optics_labels]
+    all_labels = [kmeans_labels, dbscan_labels, birch_labels, optics_labels, hdbscan_labels]
     all_metrics = [
         (kmeans_clusters, kmeans_score or 0),
         (dbscan_clusters, dbscan_score or 0),
         (birch_clusters, birch_score or 0), 
-        (optics_clusters, optics_score or 0)
+        (optics_clusters, optics_score or 0),
+        (hdbscan_clusters, hdbscan_score or 0)
     ]
     
     # Create visualizations and analysis
