@@ -111,7 +111,7 @@ class WindowedDataset(Dataset):
         self.lookback = lookback
 
     def __len__(self):
-        return len(self.X) - self.lookback
+        return max(0, len(self.X) - self.lookback)
 
     def __getitem__(self, i):
         j = i + self.lookback
@@ -145,6 +145,12 @@ def build_splits(df: pd.DataFrame, target: str):
     ds_tr = WindowedDataset(X_tr, y_tr, LOOKBACK)
     ds_va = WindowedDataset(X_va, y_va, LOOKBACK)
     ds_te = WindowedDataset(X_te, y_te, LOOKBACK)
+
+    if min(len(ds_tr), len(ds_va), len(ds_te)) == 0:
+        raise ValueError(
+            f"Not enough samples to build {LOOKBACK}-step windows for target '{target}'. "
+            "Reduce LOOKBACK or adjust RESAMPLE to keep more rows."
+        )
 
     # adaptive batch to fit memory
     batch = min(BATCH, max(16, len(ds_tr)//100))  # roughly ≤1% of training windows
