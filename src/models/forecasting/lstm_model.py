@@ -35,43 +35,108 @@ def load_forecasting_data():
     print(f"Loaded {len(df):,} samples with {len(df.columns)} features")
     return df
 
-def prepare_lstm_data(df, target_col='avg_latency', lookback=10):
-    """Prepare sequential data for LSTM forecasting."""
+def prepare_lstm_data(df, target_col='avg_latency', lookback=10, train_ratio=0.8):
+    """Prepare sequential, leakage-free data for LSTM forecasting."""
     print(f"\nPreparing LSTM data for: {target_col}")
 
     df_clean = df.dropna(subset=[target_col]).copy()
-    df_clean = df_clean.sort_index()
+    if df_clean.empty:
+        raise ValueError(f"No rows remaining after dropping NaNs for target '{target_col}'.")
 
-    # Select numeric features
-    feature_cols = [c for c in df_clean.columns if c != target_col and df_clean[c].dtype != 'object']
+    entity_col = 'square_id' if 'square_id' in df_clean.columns else None
+
+    sort_candidates = [
+        'timestamp', 'time', 'datetime', 'day_id', 'day', 'Date', 'hour', 'HOUR', 'minute', 'min', 'sec'
+    ]
+    sort_cols = [col for col in sort_candidates if col in df_clean.columns]
+
+    numeric_cols = df_clean.select_dtypes(include=[np.number]).columns.tolist()
+    exclude_cols = {target_col, 'time', 'timestamp'}
+    if entity_col:
+        exclude_cols.add(entity_col)
+    feature_cols = [c for c in numeric_cols if c not in exclude_cols]
+
     if not feature_cols:
-        raise ValueError("No numeric feature columns available for LSTM.")
+        raise ValueError("No suitable numeric feature columns available for LSTM after excluding identifiers.")
 
-    X_all = df_clean[feature_cols].values
-    y_all = df_clean[target_col].values.reshape(-1, 1)
+    groups = []
+    train_feature_blocks = []
+    train_target_blocks = []
 
-    # Scale data
+    grouped = [df_clean] if entity_col is None else [
+        grp for _, grp in df_clean.groupby(entity_col, dropna=False)
+    ]
+
+    for grp in grouped:
+        grp_sorted = grp.sort_values(sort_cols) if sort_cols else grp.sort_index()
+        if len(grp_sorted) <= lookback:
+            continue
+
+        features = grp_sorted[feature_cols].values
+        targets = grp_sorted[[target_col]].values
+
+        split_idx = int(len(grp_sorted) * train_ratio)
+        split_idx = max(split_idx, lookback)
+        split_idx = min(split_idx, len(grp_sorted) - 1)
+
+        if split_idx <= lookback:
+            continue
+
+        train_feature_blocks.append(features[:split_idx])
+        train_target_blocks.append(targets[:split_idx])
+
+        groups.append({
+            "features": features,
+            "targets": targets,
+            "split_idx": split_idx
+        })
+
+    if not groups:
+        raise ValueError(
+            f"Not enough data to create {lookback}-step sequences for target '{target_col}'. "
+            "Consider lowering lookback or adjusting preprocessing."
+        )
+
+    X_train_rows = np.vstack(train_feature_blocks)
+    y_train_rows = np.vstack(train_target_blocks)
+
     x_scaler = MinMaxScaler()
     y_scaler = MinMaxScaler()
-    X_scaled = x_scaler.fit_transform(X_all)
-    y_scaled = y_scaler.fit_transform(y_all)
+    x_scaler.fit(X_train_rows)
+    y_scaler.fit(y_train_rows)
 
-    # Create sequences
-    X_seq, y_seq = [], []
-    for i in range(lookback, len(X_scaled)):
-        X_seq.append(X_scaled[i - lookback:i])
-        y_seq.append(y_scaled[i])
+    X_train_seq, y_train_seq = [], []
+    X_test_seq, y_test_seq = [], []
 
-    X_seq, y_seq = np.array(X_seq), np.array(y_seq)
+    for info in groups:
+        features_scaled = x_scaler.transform(info["features"])
+        targets_scaled = y_scaler.transform(info["targets"])
+        split_idx = info["split_idx"]
 
-    # Split train/test
-    split = int(len(X_seq) * 0.8)
-    X_train, X_test = X_seq[:split], X_seq[split:]
-    y_train, y_test = y_seq[:split], y_seq[split:]
+        for idx in range(lookback, len(features_scaled)):
+            window = features_scaled[idx - lookback:idx]
+            target_value = targets_scaled[idx]
+            if idx < split_idx:
+                X_train_seq.append(window)
+                y_train_seq.append(target_value)
+            else:
+                X_test_seq.append(window)
+                y_test_seq.append(target_value)
 
-    print(f"  Sequences: {X_seq.shape[0]:,} total, lookback={lookback}")
+    if not X_train_seq or not X_test_seq:
+        raise ValueError(
+            "Unable to create both training and testing sequences with the current configuration. "
+            "Adjust train_ratio or lookback."
+        )
+
+    X_train = np.array(X_train_seq)
+    X_test = np.array(X_test_seq)
+    y_train = np.array(y_train_seq)
+    y_test = np.array(y_test_seq)
+
+    print(f"  Sequences: {X_train.shape[0] + X_test.shape[0]:,} total, lookback={lookback}")
     print(f"  Train: {X_train.shape[0]:,}, Test: {X_test.shape[0]:,}")
-    print(f"  Features per timestep: {X_seq.shape[2]}")
+    print(f"  Features per timestep: {X_train.shape[2]}")
 
     return X_train, X_test, y_train, y_test, y_scaler
 
