@@ -38,8 +38,11 @@ function App() {
 
   const getDefaultHyperparameters = (model) => {
     const defaults = {
-      'kmeans': { n_clusters: 5, max_k: 10, max_iter: 300, random_state: 42 },
-      'dbscan': { eps: 1.5, min_samples: 5 },
+      'kmeans': { max_k: 8, max_iter: 300, random_state: 42 },
+      'dbscan': { eps: 0.6, min_samples: 5 },
+      'birch': { max_clusters: 7, threshold: 0.3, branching_factor: 50 },
+      'optics': { min_samples: 5, max_eps: 2.0, xi: 0.1 },
+      'hdbscan': { min_cluster_size: 8, min_samples: 5 },
       'xgboost': { n_estimators: 100, learning_rate: 0.1, max_depth: 6, test_size: 0.2 },
       'arima': { p: 2, d: 1, q: 2, sample_size: 50000, forecast_steps: 50 },
     };
