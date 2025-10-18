@@ -52,10 +52,10 @@ def load_clustering_data():
         print(f"Reading data ({file_size / (1024**2):.1f} MB)...")
 
         chunks = []
-        with tqdm(total=file_size, unit='B', unit_scale=True, desc="Loading CSV") as pbar:
+        with tqdm(unit='rows', desc="Loading CSV") as pbar:
             for chunk in pd.read_csv(input_path, chunksize=chunk_size, low_memory=False):
                 chunks.append(chunk)
-                pbar.update(chunk_size * 100)
+                pbar.update(len(chunk))
         df = pd.concat(chunks, ignore_index=True)
     else:
         df = pd.read_csv(input_path, low_memory=False)

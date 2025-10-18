@@ -102,47 +102,30 @@ def create_zone_aggregations(df):
         print("Warning: square_id column not found. Skipping zone aggregation.")
         return df
 
-    # Group by zone (square_id) and calculate statistics
-    zone_features = []
-
     latency_cols = ['svr1', 'svr2', 'svr3', 'svr4']
     available_latency = [col for col in latency_cols if col in df.columns]
 
-    for zone in tqdm(df['square_id'].unique(), desc="Processing zones"):
-        if pd.isna(zone):
-            continue
+    grouped = df.groupby('square_id', dropna=True)
+    zone_df = grouped.size().rename('zone_record_count').to_frame()
 
-        zone_data = df[df['square_id'] == zone]
+    if available_latency:
+        latency_mean = grouped[available_latency].mean()
+        latency_std = grouped[available_latency].std()
+        zone_df['zone_avg_latency'] = latency_mean.mean(axis=1)
+        zone_df['zone_std_latency'] = latency_std.mean(axis=1)
 
-        zone_stats = {
-            'square_id': zone,
-            'zone_record_count': len(zone_data)
-        }
+    if 'upload_bitrate_mbits/sec' in df.columns:
+        zone_df['zone_avg_upload'] = grouped['upload_bitrate_mbits/sec'].mean()
+    if 'download_bitrate_rx_mbits/sec' in df.columns:
+        zone_df['zone_avg_download'] = grouped['download_bitrate_rx_mbits/sec'].mean()
 
-        # Average latency per zone
-        if available_latency:
-            zone_stats['zone_avg_latency'] = zone_data[available_latency].mean().mean()
-            zone_stats['zone_std_latency'] = zone_data[available_latency].std().mean()
+    if 'latitude' in df.columns and 'longitude' in df.columns:
+        zone_df['zone_center_lat'] = grouped['latitude'].mean()
+        zone_df['zone_center_lon'] = grouped['longitude'].mean()
 
-        # Average throughput per zone
-        if 'upload_bitrate_mbits/sec' in df.columns:
-            zone_stats['zone_avg_upload'] = zone_data['upload_bitrate_mbits/sec'].mean()
-        if 'download_bitrate_rx_mbits/sec' in df.columns:
-            zone_stats['zone_avg_download'] = zone_data['download_bitrate_rx_mbits/sec'].mean()
+    zone_df = zone_df.reset_index()
 
-        # GPS center of zone
-        if 'latitude' in df.columns and 'longitude' in df.columns:
-            zone_stats['zone_center_lat'] = zone_data['latitude'].mean()
-            zone_stats['zone_center_lon'] = zone_data['longitude'].mean()
-
-        zone_features.append(zone_stats)
-
-    # Create zone features dataframe
-    zone_df = pd.DataFrame(zone_features)
-
-    # Merge zone features back to main dataframe
     df = df.merge(zone_df, on='square_id', how='left')
-
     return df
 
 def create_temporal_aggregations(df, day_column='DAY'):
@@ -153,41 +136,26 @@ def create_temporal_aggregations(df, day_column='DAY'):
         print(f"Warning: {day_column} column not found. Skipping day aggregation.")
         return df
 
-    daily_features = []
-
     latency_cols = ['svr1', 'svr2', 'svr3', 'svr4']
     available_latency = [col for col in latency_cols if col in df.columns]
 
-    for day in tqdm(df[day_column].unique(), desc="Processing days"):
-        if pd.isna(day):
-            continue
+    grouped = df.groupby(day_column, dropna=True)
+    daily_df = grouped.size().rename('day_record_count').to_frame()
 
-        day_data = df[df[day_column] == day]
+    if available_latency:
+        latency_mean = grouped[available_latency].mean()
+        latency_std = grouped[available_latency].std()
+        daily_df['day_avg_latency'] = latency_mean.mean(axis=1)
+        daily_df['day_std_latency'] = latency_std.mean(axis=1)
 
-        day_stats = {
-            day_column: day,
-            'day_record_count': len(day_data)
-        }
+    if 'upload_bitrate_mbits/sec' in df.columns:
+        daily_df['day_avg_upload'] = grouped['upload_bitrate_mbits/sec'].mean()
+    if 'download_bitrate_rx_mbits/sec' in df.columns:
+        daily_df['day_avg_download'] = grouped['download_bitrate_rx_mbits/sec'].mean()
 
-        # Average latency per day
-        if available_latency:
-            day_stats['day_avg_latency'] = day_data[available_latency].mean().mean()
-            day_stats['day_std_latency'] = day_data[available_latency].std().mean()
+    daily_df = daily_df.reset_index()
 
-        # Average throughput per day
-        if 'upload_bitrate_mbits/sec' in df.columns:
-            day_stats['day_avg_upload'] = day_data['upload_bitrate_mbits/sec'].mean()
-        if 'download_bitrate_rx_mbits/sec' in df.columns:
-            day_stats['day_avg_download'] = day_data['download_bitrate_rx_mbits/sec'].mean()
-
-        daily_features.append(day_stats)
-
-    # Create daily features dataframe
-    daily_df = pd.DataFrame(daily_features)
-
-    # Merge daily features back to main dataframe
     df = df.merge(daily_df, on=day_column, how='left')
-
     return df
 
 def create_clustering_features(df):

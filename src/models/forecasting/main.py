@@ -56,10 +56,10 @@ def load_forecasting_data():
         print(f"Reading data ({file_size / (1024**2):.1f} MB)...")
 
         chunks = []
-        with tqdm(total=file_size, unit='B', unit_scale=True, desc="Loading CSV") as pbar:
+        with tqdm(unit='rows', desc="Loading CSV") as pbar:
             for chunk in pd.read_csv(input_path, chunksize=chunk_size, low_memory=False):
                 chunks.append(chunk)
-                pbar.update(chunk_size * 100)
+                pbar.update(len(chunk))
         df = pd.concat(chunks, ignore_index=True)
     else:
         df = pd.read_csv(input_path, low_memory=False)
@@ -214,13 +214,21 @@ def prepare_arima_data(df, target_col='avg_latency', sample_size=50000):
 
     df_clean = df.dropna(subset=[target_col]).copy()
 
-    # Sample for ARIMA (doesn't parallelize well)
-    if len(df_clean) > sample_size:
-        print(f"  Sampling {sample_size:,} rows for ARIMA...")
-        df_clean = df_clean.sample(n=sample_size, random_state=42)
+    sort_cols = []
+    if 'square_id' in df_clean.columns:
+        sort_cols.append('square_id')
+    for candidate in ['timestamp', 'time', 'datetime', 'day_id', 'day', 'hour']:
+        if candidate in df_clean.columns and candidate not in sort_cols:
+            sort_cols.append(candidate)
 
-    if 'hour' in df_clean.columns:
-        df_clean = df_clean.sort_values('hour')
+    if sort_cols:
+        df_clean = df_clean.sort_values(sort_cols)
+    else:
+        df_clean = df_clean.sort_index()
+
+    if len(df_clean) > sample_size:
+        print(f"  Using the most recent {sample_size:,} rows for ARIMA...")
+        df_clean = df_clean.iloc[-sample_size:]
 
     ts = df_clean[target_col].values
     print(f"  Time series length: {len(ts):,}")
