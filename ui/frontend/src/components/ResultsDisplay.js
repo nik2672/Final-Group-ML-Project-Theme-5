@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   Box,
   Typography,
@@ -62,6 +62,24 @@ function ResultsDisplay({ results, model }) {
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     Lower is better
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          )}
+
+          {results.metrics.calinski_harabasz_score !== undefined && (
+            <Grid item xs={12} sm={4}>
+              <Card elevation={2}>
+                <CardContent>
+                  <Typography color="text.secondary" gutterBottom>
+                    Calinski-Harabasz Index
+                  </Typography>
+                  <Typography variant="h4">
+                    {results.metrics.calinski_harabasz_score.toFixed(3)}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Higher is better
                   </Typography>
                 </CardContent>
               </Card>
@@ -185,7 +203,7 @@ function ResultsDisplay({ results, model }) {
     <Paper elevation={3} sx={{ p: 4, bgcolor: 'background.paper' }}>
       {results.status === 'success' && (
         <Box>
-          {model === 'kmeans' || model === 'dbscan' ? renderClusteringResults() : renderForecastingResults()}
+          {['kmeans', 'dbscan', 'birch', 'optics', 'hdbscan'].includes(model) ? renderClusteringResults() : renderForecastingResults()}
 
           {results.target_metric && (
             <Box sx={{ mt: 3 }}>
