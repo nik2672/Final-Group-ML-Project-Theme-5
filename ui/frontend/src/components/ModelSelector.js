@@ -23,6 +23,24 @@ const models = [
     description: 'Density-based clustering that identifies outlier zones automatically',
   },
   {
+    value: 'birch',
+    label: 'Birch Clustering',
+    category: 'Clustering',
+    description: 'Memory-efficient hierarchical clustering for large datasets',
+  },
+  {
+    value: 'optics',
+    label: 'OPTICS Clustering',
+    category: 'Clustering',
+    description: 'Density-based clustering that discovers natural cluster structures',
+  },
+  {
+    value: 'hdbscan',
+    label: 'HDBSCAN Clustering',
+    category: 'Clustering',
+    description: 'Hierarchical density-based clustering with robust outlier detection',
+  },
+  {
     value: 'xgboost',
     label: 'XGBoost Forecasting',
     category: 'Forecasting',

@@ -11,14 +11,27 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 
 const hyperparameterConfigs = {
   kmeans: [
-    { name: 'n_clusters', label: 'Number of Clusters', type: 'number', min: 2, max: 20, step: 1 },
-    { name: 'max_k', label: 'Max K (Elbow Method)', type: 'number', min: 2, max: 20, step: 1 },
+    { name: 'max_k', label: 'Max K for Elbow Method', type: 'number', min: 5, max: 15, step: 1 },
     { name: 'max_iter', label: 'Max Iterations', type: 'number', min: 100, max: 1000, step: 50 },
     { name: 'random_state', label: 'Random State', type: 'number', min: 0, max: 100, step: 1 },
   ],
   dbscan: [
-    { name: 'eps', label: 'Epsilon (eps)', type: 'number', min: 0.1, max: 5.0, step: 0.1 },
-    { name: 'min_samples', label: 'Min Samples', type: 'number', min: 2, max: 20, step: 1 },
+    { name: 'eps', label: 'Epsilon (eps)', type: 'number', min: 0.1, max: 1.0, step: 0.1 },
+    { name: 'min_samples', label: 'Min Samples', type: 'number', min: 2, max: 10, step: 1 },
+  ],
+  birch: [
+    { name: 'max_clusters', label: 'Max Clusters to Test', type: 'number', min: 5, max: 12, step: 1 },
+    { name: 'threshold', label: 'Threshold', type: 'number', min: 0.1, max: 1.0, step: 0.1 },
+    { name: 'branching_factor', label: 'Branching Factor', type: 'number', min: 20, max: 100, step: 10 },
+  ],
+  optics: [
+    { name: 'min_samples', label: 'Min Samples', type: 'number', min: 2, max: 15, step: 1 },
+    { name: 'max_eps', label: 'Max Epsilon', type: 'number', min: 0.5, max: 5.0, step: 0.1 },
+    { name: 'xi', label: 'Xi (Cluster Selection)', type: 'number', min: 0.01, max: 0.2, step: 0.01 },
+  ],
+  hdbscan: [
+    { name: 'min_cluster_size', label: 'Min Cluster Size', type: 'number', min: 3, max: 20, step: 1 },
+    { name: 'min_samples', label: 'Min Samples (Optional)', type: 'number', min: 1, max: 15, step: 1 },
   ],
   xgboost: [
     { name: 'n_estimators', label: 'Number of Estimators', type: 'number', min: 10, max: 500, step: 10 },
