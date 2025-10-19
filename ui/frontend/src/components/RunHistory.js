@@ -66,6 +66,7 @@ function RunHistory({ history, onClear, onCompare }) {
               <TableCell>MAE / Silhouette</TableCell>
               <TableCell>RMSE / DB Index</TableCell>
               <TableCell>R² / Clusters</TableCell>
+              <TableCell>Calinski-Harabasz</TableCell>
               <TableCell align="right">Time (s)</TableCell>
             </TableRow>
           </TableHead>
@@ -85,6 +86,9 @@ function RunHistory({ history, onClear, onCompare }) {
                 </TableCell>
                 <TableCell>
                   {formatMetric(run.metrics?.r2 || run.metrics?.n_clusters)}
+                </TableCell>
+                <TableCell>
+                  {formatMetric(run.metrics?.calinski_harabasz_score)}
                 </TableCell>
                 <TableCell align="right">{run.execution_time.toFixed(2)}</TableCell>
               </TableRow>
