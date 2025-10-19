@@ -216,7 +216,7 @@ def main():
         y_pred_xgb, _ = fit_xgb(X_tr, y_tr, X_te)
         rows.append(dict(target=tgt, model="XGBoost", **metric_pack(y_te, y_pred_xgb)))
 
-    # write csv
+    # writecsv
     out_csv = os.path.join(out_dir, "forecast_eval_summary.csv")
     pd.DataFrame(rows).to_csv(out_csv, index=False)
     print(f"\nsaved summary: {out_csv}")
