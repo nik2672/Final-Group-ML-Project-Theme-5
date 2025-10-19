@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Memory-safe GRU forecasting for large 5G datasets (Colab-friendly).
+auth-nik
+leaned out GRU forecasting for large 5G datasets (Colab-friendly).
 
-Key tricks:
-- Lazy windowing Dataset (no giant 3D arrays)
-- Optional resampling to reduce rows
-- Mixed precision on GPU
-- Pruned features + float32
+Key 
+- lazywindowing Dataset (no giant 3D arrays)
+- optional resampling to reduce rows
+- mixed precision on GPU
+- rruned features plus float32
+
 """
 
 import os, math, warnings
@@ -24,7 +26,6 @@ from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
 
-# ------------------------------ Config ------------------------------
 _IN_COLAB = "/content" in os.getcwd()
 BASE_DIR = "/content" if _IN_COLAB else os.getcwd()
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -55,7 +56,6 @@ MAX_FEATURES  = 8         # cap feature count if not using only KPIs
 NUM_WORKERS   = 0         # Colab: avoid memory-copy workers
 
 
-# ------------------------------ Data utils ------------------------------
 def find_csv() -> str:
     for p in [OVERRIDE_CSV, CSV_PRIMARY, CSV_FALLBACK]:
         if p and os.path.exists(p):
@@ -306,7 +306,7 @@ def main():
 
     results = []
     for t in targets:
-        print(f"\n--- Target: {t} ---")
+        print(f"\ntarget: {t}")
         res = train_one(df, t)
         results.append(res)
 
