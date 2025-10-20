@@ -43,9 +43,11 @@ def extract_temporal_features(df):
         df['hour_of_day'] = df[hour_col]
         df['minute'] = df[min_col]
 
-    # Time of day categories
+    # Time of day categories - FIXED: Handle edge cases
     if hour_col:
-        df['time_of_day'] = pd.cut(df[hour_col],
+        # Ensure all values are within the bin range
+        hour_values = df[hour_col].clip(lower=0, upper=23.99)
+        df['time_of_day'] = pd.cut(hour_values,
                                     bins=[0, 6, 12, 18, 24],
                                     labels=['night', 'morning', 'afternoon', 'evening'],
                                     include_lowest=True)
@@ -76,10 +78,12 @@ def extract_network_performance_features(df):
         df['std_latency'] = df[available_latency].std(axis=1)
         df['latency_range'] = df['max_latency'] - df['min_latency']
 
-        # Latency quality categories
-        df['latency_quality'] = pd.cut(df['avg_latency'],
+        # Latency quality categories - FIXED: Handle edge cases
+        latency_values = df['avg_latency'].fillna(0)  # Fill NaN with 0 for binning
+        df['latency_quality'] = pd.cut(latency_values,
                                        bins=[0, 50, 100, 200, float('inf')],
-                                       labels=['excellent', 'good', 'fair', 'poor'])
+                                       labels=['excellent', 'good', 'fair', 'poor'],
+                                       include_lowest=True)
 
     # Throughput features
     upload_col = 'upload_bitrate_mbits/sec'
@@ -89,10 +93,12 @@ def extract_network_performance_features(df):
         df['total_throughput'] = df[upload_col] + df[download_col]
         df['upload_download_ratio'] = df[upload_col] / (df[download_col] + 1e-6)  # Avoid division by zero
 
-        # Throughput quality categories
-        df['throughput_quality'] = pd.cut(df['total_throughput'],
+        # Throughput quality categories - FIXED: Handle edge cases
+        throughput_values = df['total_throughput'].fillna(0)  # Fill NaN with 0 for binning
+        df['throughput_quality'] = pd.cut(throughput_values,
                                          bins=[0, 10, 50, 100, float('inf')],
-                                         labels=['poor', 'fair', 'good', 'excellent'])
+                                         labels=['poor', 'fair', 'good', 'excellent'],
+                                         include_lowest=True)
 
     return df
 
@@ -109,9 +115,9 @@ def extract_spatial_features(df):
 
     return df
 
-def create_zone_aggregations_leakage_safe(train_df: pd.DataFrame, test_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Create per-zone aggregated features using TRAIN-only statistics."""
-    print("Creating zone-level aggregations (leakage-safe)...")
+def create_zone_aggregations_improved(train_df: pd.DataFrame, test_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Create per-zone aggregated features using TRAIN-only statistics with missing value handling."""
+    print("Creating zone-level aggregations (improved)...")
 
     if 'square_id' not in train_df.columns:
         print("Warning: square_id column not found. Skipping zone aggregation.")
@@ -141,15 +147,32 @@ def create_zone_aggregations_leakage_safe(train_df: pd.DataFrame, test_df: pd.Da
 
     zone_df = zone_df.reset_index()
 
+    # IMPROVED: Handle missing values in aggregations
+    # Fill missing values with global statistics
+    for col in zone_df.columns:
+        if col != 'square_id' and zone_df[col].isnull().any():
+            global_mean = zone_df[col].mean()
+            zone_df[col] = zone_df[col].fillna(global_mean)
+            print(f"Filled missing values in {col} with global mean: {global_mean:.4f}")
+
     # Apply same statistics to both train and test
     train_df = train_df.merge(zone_df, on='square_id', how='left')
     test_df = test_df.merge(zone_df, on='square_id', how='left')
     
+    # IMPROVED: Fill missing values for test data with global statistics
+    zone_cols = [col for col in zone_df.columns if col != 'square_id']
+    for col in zone_cols:
+        if col in test_df.columns and test_df[col].isnull().any():
+            # Use train data statistics to fill test missing values
+            train_mean = train_df[col].mean()
+            test_df[col] = test_df[col].fillna(train_mean)
+            print(f"Filled missing values in test {col} with train mean: {train_mean:.4f}")
+    
     return train_df, test_df
 
-def create_temporal_aggregations_leakage_safe(train_df: pd.DataFrame, test_df: pd.DataFrame, day_column='DAY') -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Create per-day aggregated features using TRAIN-only statistics."""
-    print("Creating day-level aggregations (leakage-safe)...")
+def create_temporal_aggregations_improved(train_df: pd.DataFrame, test_df: pd.DataFrame, day_column='DAY') -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Create per-day aggregated features using TRAIN-only statistics with missing value handling."""
+    print("Creating day-level aggregations (improved)...")
 
     if day_column not in train_df.columns:
         print(f"Warning: {day_column} column not found. Skipping day aggregation.")
@@ -175,15 +198,30 @@ def create_temporal_aggregations_leakage_safe(train_df: pd.DataFrame, test_df: p
 
     daily_df = daily_df.reset_index()
 
+    # IMPROVED: Handle missing values in aggregations
+    for col in daily_df.columns:
+        if col != day_column and daily_df[col].isnull().any():
+            global_mean = daily_df[col].mean()
+            daily_df[col] = daily_df[col].fillna(global_mean)
+            print(f"Filled missing values in {col} with global mean: {global_mean:.4f}")
+
     # Apply same statistics to both train and test
     train_df = train_df.merge(daily_df, on=day_column, how='left')
     test_df = test_df.merge(daily_df, on=day_column, how='left')
     
+    # IMPROVED: Fill missing values for test data
+    daily_cols = [col for col in daily_df.columns if col != day_column]
+    for col in daily_cols:
+        if col in test_df.columns and test_df[col].isnull().any():
+            train_mean = train_df[col].mean()
+            test_df[col] = test_df[col].fillna(train_mean)
+            print(f"Filled missing values in test {col} with train mean: {train_mean:.4f}")
+    
     return train_df, test_df
 
-def create_lag_features_leakage_safe(train_df: pd.DataFrame, test_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Create lag features without data leakage."""
-    print("Creating lag features (leakage-safe)...")
+def create_lag_features_improved(train_df: pd.DataFrame, test_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Create lag features without data leakage, with missing value handling."""
+    print("Creating lag features (improved)...")
     
     # Sort both datasets by time
     hour_col = 'HOUR' if 'HOUR' in train_df.columns else 'hour' if 'hour' in train_df.columns else None
@@ -210,6 +248,22 @@ def create_lag_features_leakage_safe(train_df: pd.DataFrame, test_df: pd.DataFra
     # Apply lag features separately to train and test
     train_df = add_lag_features(train_df)
     test_df = add_lag_features(test_df)
+    
+    # IMPROVED: Handle missing values in lag features
+    lag_cols = [col for col in train_df.columns if col.endswith('_lag1')]
+    for col in lag_cols:
+        if col in train_df.columns:
+            # Fill missing values with forward fill within each group
+            train_df[col] = train_df.groupby('square_id')[col].fillna(method='ffill')
+            # For the first record in each group, use the mean of that group
+            train_df[col] = train_df.groupby('square_id')[col].transform(
+                lambda x: x.fillna(x.mean()) if not x.isnull().all() else x
+            )
+        
+        if col in test_df.columns:
+            # For test data, use train data statistics to fill missing values
+            train_mean = train_df[col].mean()
+            test_df[col] = test_df[col].fillna(train_mean)
     
     return train_df, test_df
 
@@ -288,7 +342,7 @@ def create_forecasting_features(df):
     return forecasting_features
 
 def main():
-    print("Starting leakage-safe feature engineering pipeline...")
+    print("Starting IMPROVED leakage-safe feature engineering pipeline...")
 
     # Load separate train and test datasets
     train_df, test_df = load_train_test_data()
@@ -312,21 +366,38 @@ def main():
                 day_column = col
                 break
 
-    # Create aggregations (leakage-safe)
-    print("\n=== Creating aggregations (leakage-safe) ===")
+    # Create aggregations (improved)
+    print("\n=== Creating aggregations (improved) ===")
     if day_column:
-        train_df, test_df = create_temporal_aggregations_leakage_safe(train_df, test_df, day_column=day_column)
+        train_df, test_df = create_temporal_aggregations_improved(train_df, test_df, day_column=day_column)
     
-    train_df, test_df = create_zone_aggregations_leakage_safe(train_df, test_df)
+    train_df, test_df = create_zone_aggregations_improved(train_df, test_df)
     
-    # Create lag features (leakage-safe)
-    print("\n=== Creating lag features (leakage-safe) ===")
-    train_df, test_df = create_lag_features_leakage_safe(train_df, test_df)
+    # Create lag features (improved)
+    print("\n=== Creating lag features (improved) ===")
+    train_df, test_df = create_lag_features_improved(train_df, test_df)
+
+    # IMPROVED: Final missing value check and handling
+    print("\n=== Final missing value handling ===")
+    for df_name, df in [("train", train_df), ("test", test_df)]:
+        missing_count = df.isnull().sum().sum()
+        if missing_count > 0:
+            print(f"Warning: {df_name} data has {missing_count} missing values")
+            # Fill remaining missing values with median
+            for col in df.columns:
+                if df[col].isnull().any():
+                    if df[col].dtype in ['object', 'category']:
+                        df[col] = df[col].fillna(df[col].mode().iloc[0] if not df[col].mode().empty else 'unknown')
+                    else:
+                        df[col] = df[col].fillna(df[col].median())
+            print(f"Filled remaining missing values in {df_name} data")
+        else:
+            print(f"✅ {df_name} data has no missing values")
 
     # Save full feature sets
     print("\n=== Saving feature sets ===")
-    train_output = os.path.join(DATA_PATH, 'features_engineered_train.csv')
-    test_output = os.path.join(DATA_PATH, 'features_engineered_test.csv')
+    train_output = os.path.join(DATA_PATH, 'features_engineered_train_improved.csv')
+    test_output = os.path.join(DATA_PATH, 'features_engineered_test_improved.csv')
     
     train_df.to_csv(train_output, index=False)
     test_df.to_csv(test_output, index=False)
@@ -338,8 +409,8 @@ def main():
     train_clustering = create_clustering_features(train_df)
     test_clustering = create_clustering_features(test_df)
     
-    train_clustering_output = os.path.join(DATA_PATH, 'features_for_clustering_train.csv')
-    test_clustering_output = os.path.join(DATA_PATH, 'features_for_clustering_test.csv')
+    train_clustering_output = os.path.join(DATA_PATH, 'features_for_clustering_train_improved.csv')
+    test_clustering_output = os.path.join(DATA_PATH, 'features_for_clustering_test_improved.csv')
     
     train_clustering.to_csv(train_clustering_output, index=False)
     test_clustering.to_csv(test_clustering_output, index=False)
@@ -351,22 +422,22 @@ def main():
     train_forecasting = create_forecasting_features(train_df)
     test_forecasting = create_forecasting_features(test_df)
     
-    train_forecasting_output = os.path.join(DATA_PATH, 'features_for_forecasting_train.csv')
-    test_forecasting_output = os.path.join(DATA_PATH, 'features_for_forecasting_test.csv')
+    train_forecasting_output = os.path.join(DATA_PATH, 'features_for_forecasting_train_improved.csv')
+    test_forecasting_output = os.path.join(DATA_PATH, 'features_for_forecasting_test_improved.csv')
     
     train_forecasting.to_csv(train_forecasting_output, index=False)
     test_forecasting.to_csv(test_forecasting_output, index=False)
     print(f"Saved train forecasting features: {train_forecasting.shape} -> {train_forecasting_output}")
     print(f"Saved test forecasting features: {test_forecasting.shape} -> {test_forecasting_output}")
 
-    print("\n=== Feature engineering completed successfully! ===")
+    print("\n=== IMPROVED Feature engineering completed successfully! ===")
     print("\nGenerated files:")
-    print(f"  1. {train_output} - Train features")
-    print(f"  2. {test_output} - Test features")
-    print(f"  3. {train_clustering_output} - Train clustering features")
-    print(f"  4. {test_clustering_output} - Test clustering features")
-    print(f"  5. {train_forecasting_output} - Train forecasting features")
-    print(f"  6. {test_forecasting_output} - Test forecasting features")
+    print(f"  1. {train_output} - Train features (improved)")
+    print(f"  2. {test_output} - Test features (improved)")
+    print(f"  3. {train_clustering_output} - Train clustering features (improved)")
+    print(f"  4. {test_clustering_output} - Test clustering features (improved)")
+    print(f"  5. {train_forecasting_output} - Train forecasting features (improved)")
+    print(f"  6. {test_forecasting_output} - Test forecasting features (improved)")
 
     print("\nFeature summary:")
     print(f"  Train features: {len(train_df.columns)}")
