@@ -1,289 +1,185 @@
-"""
-HDBSCAN Clustering for 5G Network Zones
-- Loads features_for_clustering.csv
-- Aggregates by square_id
-- Scales features
-- Small param sweep for HDBSCAN
-- Prints results and saves plots/CSVs (consistent with main.py/main2.py/comparison.py)
-
-Requires:
-    pip install hdbscan
-"""
-
-import os
-import platform
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+# nik:hdbscan 
+import os, numpy as np, pandas as pd, matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
-from tqdm import tqdm
-import multiprocessing
+from sklearn.neighbors import NearestNeighbors
 
 try:
     import hdbscan
-except ImportError as e:
-    raise SystemExit(
-        "HDBSCAN is not installed.\n"
-        "Install it with: pip install hdbscan\n"
-        f"Original error: {e}"
-    )
+except Exception as e:
+    raise SystemExit("please: pip install hdbscan\n" + str(e))
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
-DATA_PATH = os.path.join(PROJECT_ROOT, "data")
-OUTPUT_PATH = os.path.join(PROJECT_ROOT, "results", "clustering")
-os.makedirs(OUTPUT_PATH, exist_ok=True)
+here = os.getcwd()
+out_dir = os.path.join(here, "results", "clustering_hdbscan")
+os.makedirs(out_dir, exist_ok=True)
 
-N_CORES = multiprocessing.cpu_count()
-IS_M_SERIES = platform.system() == "Darwin" and platform.machine() == "arm64"
+def find_paths():
+    env_tr = os.environ.get("HDB_TRAIN_CSV", "").strip()
+    env_te = os.environ.get("HDB_TEST_CSV", "").strip()
+    if env_tr and env_te and os.path.exists(env_tr) and os.path.exists(env_te):
+        return env_tr, env_te, "env"
 
-print("=" * 70)
-print("5G NETWORK PERFORMANCE: HDBSCAN CLUSTERING")
-print(f"Mode: {'M-Series' if IS_M_SERIES else 'Standard'} ({N_CORES} cores)")
-print("=" * 70)
+    drive_root = "/content/drive/MyDrive"
+    tr_drive = os.path.join(drive_root, "DATA-NEW", "features_for_clustering_train.csv")
+    te_drive = os.path.join(drive_root, "DATA-NEW", "features_for_clustering_test.csv")
+    if os.path.exists(tr_drive) and os.path.exists(te_drive):
+        return tr_drive, te_drive, "drive/DATA-NEW"
 
+    proj_data = os.path.join(here, "data")
+    tr_repo = os.path.join(proj_data, "features_for_clustering_train.csv")
+    te_repo = os.path.join(proj_data, "features_for_clustering_test.csv")
+    if os.path.exists(tr_repo) and os.path.exists(te_repo):
+        return tr_repo, te_repo, "repo/data"
 
-def load_and_prepare():
-    print("\nLoading 5G clustering features...")
-    input_path = os.path.join(DATA_PATH, "features_for_clustering.csv")
-    if not os.path.exists(input_path):
-        raise FileNotFoundError(
-            f"Data file not found at {input_path}\n"
-            "Please run feature engineering first: python src/features/feature_engineering.py"
-        )
+    raise FileNotFoundError("cant find clustering train/test csvs. set HDB_* env or put in drive/DATA-NEW")
 
-    df = pd.read_csv(input_path, low_memory=False)
-    print(f"Loaded {len(df):,} measurements with {len(df.columns)} columns")
+def read_csv(p):
+    df = pd.read_csv(p, low_memory=False)
+    df.columns = [c.strip() for c in df.columns]
+    return df
 
-    # Aggregate to zone-level
-    if "square_id" in df.columns:
-        print("Aggregating by square_id to zone-level...")
-        zone_agg = df.groupby("square_id").agg({
-            "latitude": "mean",
-            "longitude": "mean",
-            "avg_latency": "mean",
-            "std_latency": "mean",
-            "total_throughput": "mean",
-            "zone_avg_latency": "first",
-            "zone_avg_upload": "first",
-            "zone_avg_download": "first"
-        }).reset_index()
-        print(f"Aggregated to {len(zone_agg):,} zones")
-        df = zone_agg
+def agg_by_square(df):
+    if "square_id" not in df.columns:
+        return df.copy()
+    cols = {
+        "latitude": "mean","longitude": "mean",
+        "avg_latency": "mean","std_latency": "mean","total_throughput": "mean",
+        "zone_avg_latency": "first","zone_avg_upload": "first","zone_avg_download": "first",
+    }
+    cols = {k:v for k,v in cols.items() if k in df.columns}
+    return df.groupby("square_id").agg(cols).reset_index()
 
-    # Choose features 
-    feature_cols = [
-        "latitude", "longitude",
-        "avg_latency", "std_latency", "total_throughput",
-        "zone_avg_latency", "zone_avg_upload", "zone_avg_download"
-    ]
-    feature_cols = [c for c in feature_cols if c in df.columns]
-    print(f"Selected features: {feature_cols}")
+def pick_feature_cols(df):
+    base = ["latitude","longitude","avg_latency","std_latency","total_throughput",
+            "zone_avg_latency","zone_avg_upload","zone_avg_download"]
+    feats = [c for c in base if c in df.columns]
+    if not feats:
+        raise ValueError("no usable feature cols found")
+    return feats
 
-    X = df[feature_cols].fillna(0).values
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    print(f"Prepared matrix: {X_scaled.shape[0]} zones x {X_scaled.shape[1]} features")
-
-    return df, X_scaled, feature_cols
-
-
-def safe_silhouette(X, labels):
-    """ilhouette score excluding noise -1. Returns None if not computable"""
-    mask = labels != -1
-    if mask.sum() <= 1:
-        return None
-    if len(np.unique(labels[mask])) < 2:
+def safe_sil(X, labels):
+    m = labels != -1
+    if m.sum() <= 1 or len(np.unique(labels[m])) < 2:
         return None
     try:
-        return silhouette_score(X[mask], labels[mask])
+        return silhouette_score(X[m], labels[m])
     except Exception:
         return None
 
-
 def count_clusters(labels):
-    """Number of non-noise clusters and number of outliers."""
-    n_outliers = int(np.sum(labels == -1))
-    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    return n_clusters, n_outliers
+    n_out = int(np.sum(labels == -1))
+    k = len(set(labels)) - (1 if -1 in labels else 0)
+    return k, n_out
 
-
-def hdbscan_param_sweep(X):
-    """
-    Small grid search for HDBSCAN.
-    Returns best (labels, model, stats) and a DataFrame of all trials.
-    """
-    print("\nHDBSCAN parameter sweep...")
-    # Reasonable small grid for zones ~300
-    min_cluster_sizes = [5, 8, 10, 12, 15]
-    min_samples_list = [None, 3, 5, 8]
-
+def param_sweep(X):
+    mcs_list, ms_list = [5,8,10,12,15], [None,3,5,8]
     trials = []
-    best = {
-        "score": -np.inf,
-        "labels": None,
-        "model": None,
-        "params": None,
-        "n_clusters": 0,
-        "n_outliers": 0
-    }
-
-    total = len(min_cluster_sizes) * len(min_samples_list)
-    idx = 0
-    for mcs in min_cluster_sizes:
-        for ms in min_samples_list:
-            idx += 1
-            desc = f"  Trial {idx:02d}/{total}: min_cluster_size={mcs}, min_samples={ms}"
-            print(desc + "...", end=" ")
-
-            model = hdbscan.HDBSCAN(
-                min_cluster_size=mcs,
-                min_samples=ms,
-                cluster_selection_epsilon=0.0,  # kept simple
-                cluster_selection_method="eom",
-                core_dist_n_jobs=-1  # multi-core
-            )
+    best = {"score": -1e9, "labels": None, "model": None,
+            "params": None, "n_clusters": 0, "n_outliers": 0}
+    for mcs in mcs_list:
+        for ms in ms_list:
+            model = hdbscan.HDBSCAN(min_cluster_size=mcs, min_samples=ms,
+                                    cluster_selection_method="eom", core_dist_n_jobs=-1)
             labels = model.fit_predict(X)
-            n_clusters, n_outliers = count_clusters(labels)
-            sil = safe_silhouette(X, labels)
-
-            # Preference higher silhouette if None, treat as very low
+            k, out = count_clusters(labels)
+            sil = safe_sil(X, labels)
             score = -1.0 if sil is None else sil
-
-            # Tiebreakers (1) fewer outliers, (2) more clusters (but not degenerate)
-            tie = False
-            if score == best["score"]:
-                tie = True
-
-            improved = score > best["score"]
-            if tie:
-                if n_outliers < best["n_outliers"]:
-                    improved = True
-                elif n_outliers == best["n_outliers"] and n_clusters > best["n_clusters"]:
-                    improved = True
-
             trials.append({
                 "min_cluster_size": mcs,
                 "min_samples": -1 if ms is None else ms,
-                "silhouette_excl_noise": sil if sil is not None else np.nan,
-                "n_clusters": n_clusters,
-                "n_outliers": n_outliers
+                "silhouette_excl_noise": np.nan if sil is None else sil,
+                "n_clusters": k, "n_outliers": out
             })
-
-            print(f"RM (sil excl noise)={sil:.3f}" if sil is not None else "RM (sil excl noise)=N/A",
-                  f"| clusters={n_clusters}, outliers={n_outliers}")
-
-            if improved:
-                best.update({
-                    "score": score,
-                    "labels": labels,
-                    "model": model,
-                    "params": {"min_cluster_size": mcs, "min_samples": ms},
-                    "n_clusters": n_clusters,
-                    "n_outliers": n_outliers
-                })
-
-    trials_df = pd.DataFrame(trials)
-    return best, trials_df.sort_values(
-        by=["silhouette_excl_noise", "n_outliers", "n_clusters"],
-        ascending=[False, True, False]
+            better = (score > best["score"] or
+                      (np.isclose(score,best["score"]) and (out < best["n_outliers"] or
+                       (out == best["n_outliers"] and k > best["n_clusters"]))))
+            if better:
+                best.update({"score": score, "labels": labels, "model": model,
+                             "params": {"min_cluster_size": mcs, "min_samples": ms},
+                             "n_clusters": k, "n_outliers": out})
+    trials = pd.DataFrame(trials).sort_values(
+        ["silhouette_excl_noise","n_outliers","n_clusters"], ascending=[False,True,False]
     )
+    return best, trials
 
+def pca2d(X):
+    Xc = X - X.mean(0, keepdims=True)
+    _,_,vt = np.linalg.svd(Xc, full_matrices=False)
+    return Xc @ vt[:2].T
 
-# plotting & Saving 
-def plot_hdbscan(X, labels, feature_names):
-    print("Generating plot: hdbscan_clusters.png")
-    plt.figure(figsize=(10, 8))
+def plot_2d(X2, labels, fname, note):
+    plt.figure(figsize=(10,8))
+    noise = labels == -1
+    if noise.any():
+        plt.scatter(X2[noise,0], X2[noise,1], c="lightgray", s=35, alpha=0.6, label="noise")
+    m = ~noise
+    if m.any():
+        sc = plt.scatter(X2[m,0], X2[m,1], c=labels[m], cmap="Set3", s=45, alpha=0.9)
+        plt.colorbar(sc, label="cluster")
+    k,out = count_clusters(labels)
+    plt.title(f"hdbscan {note} | clusters={k} outliers={out}")
+    plt.grid(alpha=.3); plt.tight_layout()
+    path = os.path.join(out_dir, fname)
+    plt.savefig(path, dpi=150); plt.close()
+    print("[saved]", path)
 
-    # Handle noise vs clusters
-    noise_mask = labels == -1
-    cluster_mask = labels != -1
-
-    # Outliers in light gray
-    if np.sum(noise_mask) > 0:
-        plt.scatter(X[noise_mask, 0], X[noise_mask, 1],
-                    c="lightgray", alpha=0.6, s=40, label="Outliers")
-
-    # Colored clusters
-    if np.sum(cluster_mask) > 0:
-        scatter = plt.scatter(X[cluster_mask, 0], X[cluster_mask, 1],
-                              c=labels[cluster_mask], cmap="Set3", alpha=0.8, s=50)
-        plt.colorbar(scatter, label="HDBSCAN Cluster")
-
-    n_clusters, n_outliers = count_clusters(labels)
-    title = f"HDBSCAN: {n_clusters} clusters, {n_outliers} outliers"
-    plt.title(title, fontsize=14)
-    plt.xlabel(feature_names[0] if len(feature_names) > 0 else "Feature 1")
-    plt.ylabel(feature_names[1] if len(feature_names) > 1 else "Feature 2")
-    plt.grid(True, alpha=0.3)
-    if np.sum(noise_mask) > 0:
-        plt.legend()
-
-    out_path = os.path.join(OUTPUT_PATH, "hdbscan_clusters.png")
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=150, bbox_inches="tight")
-    print(f"[OK] Saved: {out_path}")
-    plt.close()
-
-
-def save_cluster_csv(df_zones, labels):
-    print("Saving HDBSCAN cluster assignments...")
-    out_df = df_zones.copy()
-    out_df["hdbscan_cluster"] = labels
-    out_file = os.path.join(OUTPUT_PATH, "hdbscan_clusters.csv")
-    out_df.to_csv(out_file, index=False)
-    print(f"[OK] Saved: {out_file}")
-
-
-def save_trials_csv(trials_df):
-    out_file = os.path.join(OUTPUT_PATH, "hdbscan_trials.csv")
-    trials_df.to_csv(out_file, index=False)
-    print(f"[OK] Saved grid search table: {out_file}")
-
-
+def assign_test_by_knn(Xtr, lab_tr, Xte, n_neighbors=5):
+    m = lab_tr != -1
+    if m.sum() == 0:
+        return np.full(len(Xte), -1, dtype=int)
+    nn = NearestNeighbors(n_neighbors=min(n_neighbors, m.sum())).fit(Xtr[m])
+    idx = nn.kneighbors(Xte, return_distance=False)
+    out = []
+    pool = lab_tr[m]
+    for row in pool[idx]:
+        vals, cnt = np.unique(row[row!=-1], return_counts=True)
+        out.append(int(vals[np.argmax(cnt)]) if len(vals) else -1)
+    return np.array(out, dtype=int)
 
 def main():
-    try:
-        df_zones, X_scaled, feature_names = load_and_prepare()
+    tr_path, te_path, mode = find_paths()
+    print("paths:", mode)
+    print(" train:", tr_path)
+    print(" test :", te_path)
+    print(" save ->", out_dir)
 
-        # Param sweep
-        best, trials_df = hdbscan_param_sweep(X_scaled)
-        save_trials_csv(trials_df)
+    df_tr_raw, df_te_raw = read_csv(tr_path), read_csv(te_path)
+    df_tr, df_te = agg_by_square(df_tr_raw), agg_by_square(df_te_raw)
+    print("zones: train=", len(df_tr), " test=", len(df_te))
 
-        labels = best["labels"]
-        n_clusters, n_outliers = best["n_clusters"], best["n_outliers"]
-        sil = safe_silhouette(X_scaled, labels)
+    feats = pick_feature_cols(df_tr)
+    Xtr = df_tr[feats].fillna(0).values
+    Xte = df_te[feats].fillna(0).values
 
-        print("\nHDBSCAN BEST CONFIGURATION")
-        print("-" * 50)
-        print(f"min_cluster_size : {best['params']['min_cluster_size']}")
-        print(f"min_samples      : {best['params']['min_samples']}")
-        print(f"clusters         : {n_clusters}")
-        print(f"outliers         : {n_outliers} ({n_outliers / len(labels) * 100:.1f}%)")
-        print(f"silhouette excl noise : {sil:.3f}" if sil is not None else
-              "silhouette excl noise : N/A")
+    sc = StandardScaler().fit(Xtr)
+    Xtr_s, Xte_s = sc.transform(Xtr), sc.transform(Xte)
 
-        # Output artifacts
-        plot_hdbscan(X_scaled, labels, feature_names)
-        save_cluster_csv(df_zones, labels)
+    best, trials = param_sweep(Xtr_s)
+    trials_path = os.path.join(out_dir, "hdbscan_trials.csv")
+    trials.to_csv(trials_path, index=False); print("[saved]", trials_path)
 
-        # Quick cluster distribution summary
-        print("\nHDBSCAN Cluster Distribution:")
-        unique, counts = np.unique(labels, return_counts=True)
-        dist = {int(k): int(v) for k, v in zip(unique, counts)}
-        print(dist)
+    labels_tr = best["labels"]
+    sil = safe_sil(Xtr_s, labels_tr)
+    print("best params:", best["params"], "| clusters:", best["n_clusters"],
+          "outliers:", best["n_outliers"], "| sil(excl noise):", "N/A" if sil is None else f"{sil:.3f}")
 
-        print("\n" + "=" * 70)
-        print("[OK] HDBSCAN Clustering Complete!")
-        print(f"Results saved to: {OUTPUT_PATH}")
-        print("=" * 70)
+    Xtr_2 = pca2d(Xtr_s)
+    plot_2d(Xtr_2, labels_tr, "hdbscan_clusters_train.png", "train")
 
-    except Exception as e:
-        print("\n[ERROR] HDBSCAN run failed.")
-        print(str(e))
-        raise
+    out_tr = df_tr.copy(); out_tr["hdbscan_cluster"] = labels_tr
+    tr_csv = os.path.join(out_dir, "hdbscan_clusters_train.csv")
+    out_tr.to_csv(tr_csv, index=False); print("[saved]", tr_csv)
 
+    labels_te = assign_test_by_knn(Xtr_s, labels_tr, Xte_s, 5)
+    Xte_2 = pca2d(Xte_s)
+    plot_2d(Xte_2, labels_te, "hdbscan_clusters_test.png", "test(knn)")
+
+    out_te = df_te.copy(); out_te["hdbscan_cluster"] = labels_te
+    te_csv = os.path.join(out_dir, "hdbscan_clusters_test.csv")
+    out_te.to_csv(te_csv, index=False); print("[saved]", te_csv)
+
+    u,c = np.unique(labels_tr, return_counts=True); print("train dist:", dict(zip(map(int,u), map(int,c))))
+    u2,c2 = np.unique(labels_te, return_counts=True); print("test  dist:", dict(zip(map(int,u2), map(int,c2))))
 
 if __name__ == "__main__":
     main()

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # auth: nik
-# lean-ish GRU that works with the new train/test CSVs
+# gru-lean v2 that reads new train/test csvs and saves to /content/results in colab
 
 import os, math, warnings
 import numpy as np
@@ -16,21 +16,39 @@ from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
 
-# paths
-_here = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(_here)))
-data_dir = os.path.join(project_root, "data")
-out_dir  = os.path.join(project_root, "results", "forecasting_gru_lean_v2")
-os.makedirs(out_dir, exist_ok=True)
+IN_COLAB = "/content" in os.getcwd() or "COLAB_GPU" in os.environ
+HERE = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 
-train_csv = os.path.join(data_dir, "features_for_forecasting_train.csv")
-test_csv  = os.path.join(data_dir, "features_for_forecasting_test.csv")
-engineered_csv = os.path.join(data_dir, "features_engineered.csv")
+# where outputs go
+OUT_DIR = "/content/results/forecasting_gru_lean_v2" if IN_COLAB \
+          else os.path.join(PROJECT_ROOT, "results", "forecasting_gru_lean_v2")
+os.makedirs(OUT_DIR, exist_ok=True)
+
+def _find_split_csvs():
+    """look for train/test csvs in env, repo data/, or Drive DATA-NEW"""
+    tr_env = os.environ.get("GRU_TRAIN_CSV", "").strip()
+    te_env = os.environ.get("GRU_TEST_CSV", "").strip()
+    if tr_env and te_env and os.path.exists(tr_env) and os.path.exists(te_env):
+        return tr_env, te_env, "env"
+
+    tr_repo = os.path.join(PROJECT_ROOT, "data", "features_for_forecasting_train.csv")
+    te_repo = os.path.join(PROJECT_ROOT, "data", "features_for_forecasting_test.csv")
+    if os.path.exists(tr_repo) and os.path.exists(te_repo):
+        return tr_repo, te_repo, "repo-data"
+
+    tr_drive = "/content/drive/MyDrive/DATA-NEW/features_for_forecasting_train.csv"
+    te_drive = "/content/drive/MyDrive/DATA-NEW/features_for_forecasting_test.csv"
+    if os.path.exists(tr_drive) and os.path.exists(te_drive):
+        return tr_drive, te_drive, "drive-data-new"
+
+    return None, None, None
+
+ENGINEERED_CSV = os.path.join(PROJECT_ROOT, "data", "features_engineered.csv")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 use_amp = torch.cuda.is_available()
 
-# knobs
 seed = 42
 np.random.seed(seed); torch.manual_seed(seed)
 
@@ -46,22 +64,18 @@ num_workers = 0
 use_only_kpis = False
 max_features  = 16
 
-# utils
 def _norm_names(df: pd.DataFrame) -> pd.DataFrame:
+    """normalize column names and fix common variants"""
     m = {c: c.lower() for c in df.columns}
     df = df.rename(columns=m)
     ren = {
         "upload_bitrate_mbits/sec": "upload_bitrate",
         "download_bitrate_rx_mbytes": "download_bitrate",
-        "avg_latency_lag1": "avg_latency_lag1",
         "avg_latency_lag_1": "avg_latency_lag1",
-        "avg_latencylag1": "avg_latency_lag1",
         "upload_bitrate_mbits/sec_lag1": "upload_bitrate_lag1",
         "upload_bitrate_lag_1": "upload_bitrate_lag1",
         "download_bitrate_rx_mbytes_lag1": "download_bitrate_lag1",
         "download_bitrate_lag_1": "download_bitrate_lag1",
-        "avg_latencylag_1": "avg_latency_lag1",
-        "avg_latency": "avg_latency",
     }
     for k, v in ren.items():
         if k in df.columns:
@@ -69,7 +83,7 @@ def _norm_names(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def _pick_kpis(df: pd.DataFrame):
-    return [c for c in ["avg_latency","upload_bitrate","download_bitrate"] if c in df.columns]
+    return [c for c in ["avg_latency", "upload_bitrate", "download_bitrate"] if c in df.columns]
 
 def _select_feats(df: pd.DataFrame, target: str):
     num = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -86,17 +100,17 @@ def _downcast(df: pd.DataFrame, cols):
         df[c] = pd.to_numeric(df[c], errors="coerce").astype(np.float32)
     return df
 
-# dataset
 class WinDS(Dataset):
+    """windowed dataset that slices on the fly"""
     def __init__(self, X, y, w):
         self.X = X
-        self.y = y.reshape(-1,1)
+        self.y = y.reshape(-1, 1)
         self.w = w
-    def __len__(self): 
+    def __len__(self):
         return max(0, len(self.X) - self.w)
     def __getitem__(self, i):
         j = i + self.w
-        xw = self.X[j-self.w:j]
+        xw = self.X[j - self.w : j]
         return torch.from_numpy(xw), torch.from_numpy(self.y[j])
 
 def _make_loaders_from_arrays(X_tr, y_tr, X_te, y_te):
@@ -120,7 +134,6 @@ def _make_loaders_from_arrays(X_tr, y_tr, X_te, y_te):
     ld_te = DataLoader(ds_te, batch_size=batch, shuffle=False, num_workers=num_workers, pin_memory=pin)
     return ld_tr, ld_va, ld_te
 
-# model
 class GRUReg(nn.Module):
     def __init__(self, n_features, hidden=hidden, n_layers=n_layers, dropout=dropout):
         super().__init__()
@@ -142,21 +155,22 @@ class GRUReg(nn.Module):
         last = out[:, -1, :]
         return self.head(last)
 
-# data loading for the new split
 def load_split_or_fallback():
-    if os.path.exists(train_csv) and os.path.exists(test_csv):
-        tr = pd.read_csv(train_csv, low_memory=False)
-        te = pd.read_csv(test_csv, low_memory=False)
+    """use provided train/test split if found, else split features_engineered.csv chronologically"""
+    tr_csv, te_csv, mode = _find_split_csvs()
+    if tr_csv and te_csv:
+        tr = pd.read_csv(tr_csv, low_memory=False)
+        te = pd.read_csv(te_csv, low_memory=False)
         tr, te = _norm_names(tr), _norm_names(te)
-        return tr.reset_index(drop=True), te.reset_index(drop=True), "split"
-    if not os.path.exists(engineered_csv):
-        raise FileNotFoundError(f"missing: {train_csv} / {test_csv} and also {engineered_csv}")
-    df = pd.read_csv(engineered_csv, low_memory=False)
+        return tr.reset_index(drop=True), te.reset_index(drop=True), mode
+    if not os.path.exists(ENGINEERED_CSV):
+        raise FileNotFoundError("cant find train/test csvs or features_engineered.csv")
+    df = pd.read_csv(ENGINEERED_CSV, low_memory=False)
     df = _norm_names(df)
     if "time" in df.columns:
         df["timestamp"] = pd.to_datetime(df["time"], unit="s", errors="coerce")
         df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
-    n = len(df); n_tr = int(0.8*n)
+    n = len(df); n_tr = int(0.8 * n)
     tr, te = df.iloc[:n_tr].copy(), df.iloc[n_tr:].copy()
     return tr, te, "fallback"
 
@@ -167,17 +181,16 @@ def build_arrays(tr_df, te_df, target):
     te_df = _downcast(te_df, cols)
 
     xsc = StandardScaler().fit(tr_df[feats].values.astype(np.float32))
-    ysc = MinMaxScaler().fit(tr_df[target].values.reshape(-1,1).astype(np.float32))
+    ysc = MinMaxScaler().fit(tr_df[target].values.reshape(-1, 1).astype(np.float32))
 
     X_tr = xsc.transform(tr_df[feats].values.astype(np.float32)).astype(np.float32)
-    y_tr = ysc.transform(tr_df[target].values.reshape(-1,1).astype(np.float32)).ravel()
+    y_tr = ysc.transform(tr_df[target].values.reshape(-1, 1).astype(np.float32)).ravel()
 
     X_te = xsc.transform(te_df[feats].values.astype(np.float32)).astype(np.float32)
-    y_te = ysc.transform(te_df[target].values.reshape(-1,1).astype(np.float32)).ravel()
+    y_te = ysc.transform(te_df[target].values.reshape(-1, 1).astype(np.float32)).ravel()
 
     return X_tr, y_tr, X_te, y_te, ysc, len(feats), feats
 
-# train/eval one target
 def run_one(tr_df, te_df, target):
     X_tr, y_tr, X_te, y_te, ysc, n_feats, feats = build_arrays(tr_df, te_df, target)
     ld_tr, ld_va, ld_te = _make_loaders_from_arrays(X_tr, y_tr, X_te, y_te)
@@ -189,7 +202,7 @@ def run_one(tr_df, te_df, target):
 
     best_val = float("inf"); best = None
 
-    pbar = tqdm(range(1, epochs+1), desc=f"[{target}] epochs", ncols=110)
+    pbar = tqdm(range(1, epochs + 1), desc=f"[{target}] epochs", ncols=110)
     for _ in pbar:
         model.train()
         tr_sum, tr_n = 0.0, 0
@@ -230,18 +243,18 @@ def run_one(tr_df, te_df, target):
     y_hat = np.vstack(preds).ravel()
     y_true = np.vstack(trues).ravel()
 
-    y_hat = ysc.inverse_transform(y_hat.reshape(-1,1)).ravel()
-    y_true = ysc.inverse_transform(y_true.reshape(-1,1)).ravel()
+    y_hat = ysc.inverse_transform(y_hat.reshape(-1, 1)).ravel()
+    y_true = ysc.inverse_transform(y_true.reshape(-1, 1)).ravel()
 
     mae  = mean_absolute_error(y_true, y_hat)
     rmse = math.sqrt(mean_squared_error(y_true, y_hat))
     r2   = r2_score(y_true, y_hat) if len(np.unique(y_true)) > 1 else np.nan
 
     safe = target.replace("/", "_")
-    _plot_pred(y_true, y_hat, f"GRU-lean v2 – {target}",
-               os.path.join(out_dir, f"gru_lean_v2_{safe}.png"))
+    _plot_pred(y_true, y_hat, f"gru-lean v2 – {target}",
+               os.path.join(OUT_DIR, f"gru_lean_v2_{safe}.png"))
     _plot_res(y_true, y_hat, target,
-              os.path.join(out_dir, f"gru_lean_v2_{safe}_residuals.png"))
+              os.path.join(OUT_DIR, f"gru_lean_v2_{safe}_residuals.png"))
 
     return {
         "target": target, "model": "GRU-lean-v2",
@@ -251,7 +264,7 @@ def run_one(tr_df, te_df, target):
     }
 
 def _plot_pred(y_true, y_pred, title, outp):
-    plt.figure(figsize=(12,5))
+    plt.figure(figsize=(12, 5))
     plt.plot(y_true, label="actual", alpha=0.85)
     plt.plot(y_pred, label="pred", linestyle="--")
     plt.title(title); plt.xlabel("time"); plt.ylabel("value")
@@ -260,32 +273,33 @@ def _plot_pred(y_true, y_pred, title, outp):
 
 def _plot_res(y_true, y_pred, label, outp):
     r = y_true - y_pred
-    plt.figure(figsize=(12,4))
+    plt.figure(figsize=(12, 4))
     plt.plot(r, alpha=0.85)
     plt.title(f"residuals – {label}"); plt.xlabel("time"); plt.ylabel("error")
     plt.grid(alpha=0.3); plt.tight_layout()
     plt.savefig(outp, dpi=150); plt.close()
 
 def main():
-    print(f"GRU-lean v2 | device={device.type} | out={out_dir}")
+    print(f"GRU-lean v2 | device={device.type} | out={OUT_DIR}")
     tr_df, te_df, mode = load_split_or_fallback()
     print(f"data mode: {mode}")
+    print(f"rows: train={len(tr_df):,}  test={len(te_df):,}")
 
-    targets = [c for c in ["avg_latency","upload_bitrate","download_bitrate"] if c in tr_df.columns]
+    targets = [c for c in ["avg_latency", "upload_bitrate", "download_bitrate"] if c in tr_df.columns]
     if not targets:
         raise ValueError("no KPI targets found in train csv")
 
     results = []
     for t in targets:
-        print(f"\n--- {t} ---")
+        print(f"\n{t}")
         res = run_one(tr_df, te_df, t)
         print(f"  test: mae={res['MAE']:.3f} rmse={res['RMSE']:.3f} r2={res['R2']:.3f}")
         results.append(res)
 
-    out_csv = os.path.join(out_dir, "model_comparison_gru_lean_v2.csv")
+    out_csv = os.path.join(OUT_DIR, "model_comparison_gru_lean_v2.csv")
     pd.DataFrame(results).to_csv(out_csv, index=False)
     print(f"\nsaved summary: {out_csv}")
-    print(f"plots dir: {out_dir}")
+    print(f"plots dir: {OUT_DIR}")
 
 if __name__ == "__main__":
     main()
