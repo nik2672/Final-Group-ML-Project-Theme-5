@@ -399,6 +399,21 @@ def main():
         else:
             print(f"{df_name} data has no missing values")
 
+    # Sort data by day_id to maintain chronological order
+    print("\n=== Sorting data by day_id ===")
+    if day_column and day_column in train_df.columns:
+        hour_col = 'HOUR' if 'HOUR' in train_df.columns else 'hour' if 'hour' in train_df.columns else None
+        if hour_col:
+            train_df = train_df.sort_values([day_column, hour_col, 'square_id']).reset_index(drop=True)
+            test_df = test_df.sort_values([day_column, hour_col, 'square_id']).reset_index(drop=True)
+            print(f"Sorted train and test data by {day_column}, {hour_col}, and square_id")
+        else:
+            train_df = train_df.sort_values([day_column, 'square_id']).reset_index(drop=True)
+            test_df = test_df.sort_values([day_column, 'square_id']).reset_index(drop=True)
+            print(f"Sorted train and test data by {day_column} and square_id")
+    else:
+        print(f"Warning: {day_column} column not found, skipping sorting")
+
     # Save full feature sets
     print("\n=== Saving feature sets ===")
     train_output = os.path.join(DATA_PATH, 'features_engineered_train_improved.csv')
