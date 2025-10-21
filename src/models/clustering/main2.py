@@ -45,61 +45,75 @@ else:
 
 def load_clustering_data():
     """
-    Load the 5G network performance data from the specified data file.
+    Load the 5G network performance data from separate train/test files (leakage-safe).
     
     Returns:
-        pandas.DataFrame: Network performance measurements with location and quality metrics
+        tuple: (train_df, test_df) - Network performance measurements split by time
     """
-    print("\nLoading 5G network performance data...")
+    print("\nLoading 5G network performance data (train/test split)...")
     
-    # Define data file location
-    input_path = os.path.join(DATA_PATH, 'features_for_clustering.csv')
+    # Define data file locations - using new improved features
+    train_path = os.path.join(DATA_PATH, 'features_for_clustering_train_improved.csv')
+    test_path = os.path.join(DATA_PATH, 'features_for_clustering_test_improved.csv')
 
-    # Check if the data file actually exists
-    if not os.path.exists(input_path):
+    # Check if the data files exist
+    if not os.path.exists(train_path):
         raise FileNotFoundError(
-            f"Data file not found at {input_path}. "
-            "Please run feature engineering first: python src/features/feature_engineering.py"
+            f"Train data not found at {train_path}. "
+            "Please run feature engineering first: python src/features/leakage_safe_feature_engineering.py"
+        )
+    
+    if not os.path.exists(test_path):
+        raise FileNotFoundError(
+            f"Test data not found at {test_path}. "
+            "Please run feature engineering first: python src/features/leakage_safe_feature_engineering.py"
         )
 
     # Load the data 
-    df = pd.read_csv(input_path, low_memory=False)
-    print(f"Successfully loaded {len(df):,} network measurements with {len(df.columns)} different metrics")
-    return df
-
-
-def prepare_features(df):
-    """
-    Prepare the data for analysis by selecting relevant features and standardizing their scales.
+    train_df = pd.read_csv(train_path, low_memory=False)
+    test_df = pd.read_csv(test_path, low_memory=False)
     
-    Performs feature selection and normalization to ensure comparable measurement scales
-    across different network performance metrics for effective clustering analysis.
+    print(f"Successfully loaded TRAIN: {len(train_df):,} measurements with {len(train_df.columns)} metrics")
+    print(f"Successfully loaded TEST: {len(test_df):,} measurements with {len(test_df.columns)} metrics")
+    
+    return train_df, test_df
+
+
+def prepare_features(train_df, test_df):
+    """
+    Prepare TRAIN and TEST data separately for leakage-safe analysis.
+    
+    Fits scaler on TRAIN only, then transforms both TRAIN and TEST.
     
     Args:
-        df (pandas.DataFrame): Raw network performance data
+        train_df (pandas.DataFrame): Training network performance data
+        test_df (pandas.DataFrame): Test network performance data
         
     Returns:
-        tuple: Standardized features, feature names, scaler object, processed dataframe
+        tuple: (X_train_scaled, X_test_scaled, feature_names, scaler, train_processed, test_processed)
     """
-    print("\nPreparing data for clustering analysis...")
+    print("\nPreparing data for clustering analysis (leakage-safe)...")
     
-    # Zone-level aggregation (consistent with team approach)
-    # This reduces 2.4M samples to aggregated zones for efficient processing
-    if 'square_id' in df.columns:
-        print(f"Aggregating {len(df):,} measurements by zone (square_id)...")
-        zone_agg = df.groupby('square_id').agg({
-            'latitude': 'mean',
-            'longitude': 'mean', 
-            'avg_latency': 'mean',
-            'std_latency': 'mean',
-            'total_throughput': 'mean',
-            'zone_avg_latency': 'first',
-            'zone_avg_upload': 'first',
-            'zone_avg_download': 'first'
-        }).reset_index()
-        
-        print(f"Reduced to {len(zone_agg):,} zones (much faster processing!)")
-        df = zone_agg
+    # Zone-level aggregation for both train and test
+    def aggregate_zones(df, label):
+        if 'square_id' in df.columns:
+            print(f"Aggregating {len(df):,} {label} measurements by zone (square_id)...")
+            zone_agg = df.groupby('square_id').agg({
+                'latitude': 'mean',
+                'longitude': 'mean', 
+                'avg_latency': 'mean',
+                'std_latency': 'mean',
+                'total_throughput': 'mean',
+                'zone_avg_latency': 'first',
+                'zone_avg_upload': 'first',
+                'zone_avg_download': 'first'
+            }).reset_index()
+            print(f"Reduced to {len(zone_agg):,} {label} zones")
+            return zone_agg
+        return df.copy()
+    
+    train_processed = aggregate_zones(train_df, "train")
+    test_processed = aggregate_zones(test_df, "test")
     
     # Use consistent features for team analysis compatibility
     feature_cols = [
@@ -107,25 +121,28 @@ def prepare_features(df):
         'avg_latency', 'std_latency', 'total_throughput',
         'zone_avg_latency', 'zone_avg_upload', 'zone_avg_download'
     ]
-    feature_cols = [col for col in feature_cols if col in df.columns]
+    feature_cols = [col for col in feature_cols if col in train_processed.columns]
 
     # If expected measurements are missing, use available numeric data
     if len(feature_cols) < 3:
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        numeric_cols = train_processed.select_dtypes(include=[np.number]).columns.tolist()
         feature_cols = numeric_cols[:8]  # Take the first 8 numeric measurements
         
     print(f"Selected features for clustering: {feature_cols}")
     
-    # Extract the selected data and fill in any missing values with zeros
-    X = df[feature_cols].fillna(0)
+    # Extract features from TRAIN and TEST
+    X_train = train_processed[feature_cols].fillna(0)
+    X_test = test_processed[feature_cols].fillna(0)
     
-    # Standardize the data (normalize all measurements for comparison)
-    # Converts all metrics to comparable scales for effective clustering
+    # IMPORTANT: Fit scaler on TRAIN only, then transform both
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)  # Use same scaler fitted on train
     
-    print(f"Prepared data matrix: {X_scaled.shape[0]:,} locations with {X_scaled.shape[1]} measurements each")
-    return X_scaled, feature_cols, scaler, df
+    print(f"Prepared TRAIN: {X_train_scaled.shape[0]:,} zones with {X_train_scaled.shape[1]} features")
+    print(f"Prepared TEST: {X_test_scaled.shape[0]:,} zones with {X_test_scaled.shape[1]} features")
+    
+    return X_train_scaled, X_test_scaled, feature_cols, scaler, train_processed, test_processed
 
 
 def run_birch_clustering(X, max_clusters=6):
@@ -223,13 +240,16 @@ def run_optics_clustering(X):
     """
     print("\nUsing OPTICS algorithm to discover natural performance groups...")
     
-    # Set up the OPTICS algorithm with settings optimized for zone-level data
+    # Set up OPTICS for performance-based clustering (no geographic features)
+    # With 274 zones and performance-only features, these parameters balance:
+    # - Finding meaningful clusters (not too strict)
+    # - Identifying true outliers (not too permissive)
     optics = OPTICS(
-        min_samples=5,           # Reduced for smaller zone dataset (was 10)
-        max_eps=2.0,             # Increased for zone distances (was 0.5) 
-        cluster_method='xi',     # The method for deciding where one group ends and another begins
-        xi=0.1,                  # Relaxed boundary detection (was 0.05)
-        n_jobs=-1                # Use all available CPU cores for faster processing
+        min_samples=5,           # Relaxed for smaller dataset (5 neighbors required)
+        max_eps=2.0,             # Generous distance threshold for performance similarity
+        cluster_method='xi',     # Steep boundary detection method
+        xi=0.1,                 # Moderate steepness (0.1 = 10% relative density change)
+        n_jobs=-1                # Use all available CPU cores
     )
     
     # Analyze the data and assign each location to a group (or mark as outlier)
@@ -356,6 +376,7 @@ def plot_optics_results(X, optics_labels, feature_names):
     plt.close()
 
 
+
 def save_birch_results(df, birch_labels):
     """Save Birch clustering results to separate CSV file."""
     if birch_labels is None:
@@ -401,6 +422,66 @@ def save_optics_results(df, optics_labels):
             print(f"   Natural Group {cluster_id}: {count:,} network locations")
 
 
+def assign_test_clusters_knn(X_train, train_labels, X_test, n_neighbors=5):
+    """
+    Assign test data to clusters using K-Nearest Neighbors based on train clusters.
+    
+    This prevents data leakage by:
+    1. Training clustering on TRAIN data only
+    2. Using KNN to assign TEST points to nearest train clusters
+    
+    Args:
+        X_train: Scaled training features
+        train_labels: Cluster labels from training
+        X_test: Scaled test features
+        n_neighbors: Number of neighbors to consider
+        
+    Returns:
+        Test cluster labels
+    """
+    from sklearn.neighbors import NearestNeighbors
+    
+    print(f"\nAssigning test data to clusters using {n_neighbors}-NN...")
+    
+    # For OPTICS: handle outliers separately
+    if -1 in train_labels:
+        # Only use non-outlier points for KNN
+        mask = train_labels != -1
+        if mask.sum() == 0:
+            print("Warning: All train points are outliers, assigning all test as outliers")
+            return np.full(len(X_test), -1, dtype=int)
+        
+        nn = NearestNeighbors(n_neighbors=min(n_neighbors, mask.sum())).fit(X_train[mask])
+        indices = nn.kneighbors(X_test, return_distance=False)
+        
+        # Majority vote from neighbors
+        test_labels = []
+        train_labels_clean = train_labels[mask]
+        for neighbor_idx in indices:
+            neighbor_labels = train_labels_clean[neighbor_idx]
+            # Remove outliers from voting
+            valid_labels = neighbor_labels[neighbor_labels != -1]
+            if len(valid_labels) > 0:
+                test_labels.append(np.bincount(valid_labels).argmax())
+            else:
+                test_labels.append(-1)  # All neighbors are outliers
+        
+        return np.array(test_labels, dtype=int)
+    
+    else:
+        # Standard case (Birch): all points have valid clusters
+        nn = NearestNeighbors(n_neighbors=n_neighbors).fit(X_train)
+        indices = nn.kneighbors(X_test, return_distance=False)
+        
+        # Majority vote
+        test_labels = []
+        for neighbor_idx in indices:
+            neighbor_labels = train_labels[neighbor_idx]
+            test_labels.append(np.bincount(neighbor_labels).argmax())
+        
+        return np.array(test_labels, dtype=int)
+
+
 def main():
     """
     Execute the complete clustering analysis pipeline.
@@ -422,31 +503,53 @@ def main():
     print("=" * 60)
 
     try:
-        # Step 1: Load the 5G network measurement data
+        # Step 1: Load the 5G network measurement data (train/test split)
         print("\n=== STEP 1: LOADING DATA ===")
-        df = load_clustering_data()
+        train_df, test_df = load_clustering_data()
 
-        # Step 2: Prepare the data for analysis
+        # Step 2: Prepare the data for analysis (leakage-safe)
         print("\n=== STEP 2: PREPARING DATA ===")
-        X_scaled, feature_names, scaler, df_processed = prepare_features(df)
+        X_train_scaled, X_test_scaled, feature_names, scaler, train_processed, test_processed = prepare_features(train_df, test_df)
 
-        # Step 3: Use Birch algorithm to find performance zones
+        # Step 3: Use Birch algorithm to find performance zones (FIT ON TRAIN ONLY)
         print("\n=== STEP 3: BIRCH ANALYSIS ===")
-        birch_labels, birch_model, n_birch = run_birch_clustering(X_scaled)
-
-        # Step 4: Use OPTICS algorithm to find natural groupings
-        print("\n=== STEP 4: OPTICS ANALYSIS ===")
-        optics_labels, optics_model, n_optics = run_optics_clustering(X_scaled)
-
-        # Step 5: Create individual visualizations
-        print("\n=== STEP 5: CREATING VISUALIZATIONS ===")
-        plot_birch_results(X_scaled, birch_labels, feature_names)
-        plot_optics_results(X_scaled, optics_labels, feature_names)
+        birch_train_labels, birch_model, n_birch = run_birch_clustering(X_train_scaled)
         
-        # Step 6: Save results to separate files
+        # Assign test data using KNN
+        birch_test_labels = assign_test_clusters_knn(X_train_scaled, birch_train_labels, X_test_scaled)
+        print(f"Birch test assignments: {len(birch_test_labels)} zones assigned")
+
+        # Step 4: Use OPTICS algorithm to find natural groupings (FIT ON TRAIN ONLY)
+        print("\n=== STEP 4: OPTICS ANALYSIS ===")
+        optics_train_labels, optics_model, n_optics = run_optics_clustering(X_train_scaled)
+        
+        # Assign test data using KNN
+        optics_test_labels = assign_test_clusters_knn(X_train_scaled, optics_train_labels, X_test_scaled)
+        print(f"OPTICS test assignments: {len(optics_test_labels)} zones assigned")
+
+        # Step 5: Create individual visualizations (using train data)
+        print("\n=== STEP 5: CREATING VISUALIZATIONS ===")
+        plot_birch_results(X_train_scaled, birch_train_labels, feature_names)
+        plot_optics_results(X_train_scaled, optics_train_labels, feature_names)
+        
+        # Step 6: Save results to separate files (TRAIN and TEST separately)
         print("\n=== STEP 6: SAVING RESULTS ===")
-        save_birch_results(df_processed, birch_labels)
-        save_optics_results(df_processed, optics_labels)        # Step 7: Show final summary
+        save_birch_results(train_processed, birch_train_labels)
+        save_optics_results(train_processed, optics_train_labels)
+        
+        # Save TEST results separately
+        print("\nSaving TEST results...")
+        test_birch_df = test_processed.copy()
+        test_birch_df['birch_cluster'] = birch_test_labels
+        test_birch_output = os.path.join(OUTPUT_PATH, 'birch_clusters_test.csv')
+        test_birch_df.to_csv(test_birch_output, index=False)
+        print(f"Birch TEST results saved: {test_birch_output}")
+        
+        test_optics_df = test_processed.copy()
+        test_optics_df['optics_cluster'] = optics_test_labels
+        test_optics_output = os.path.join(OUTPUT_PATH, 'optics_clusters_test.csv')
+        test_optics_df.to_csv(test_optics_output, index=False)
+        print(f"OPTICS TEST results saved: {test_optics_output}")        
         print("\n" + "=" * 60)
         print("ANALYSIS COMPLETE!")
         print(f"Birch method identified: {n_birch} performance zones")
