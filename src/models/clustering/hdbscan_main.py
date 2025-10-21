@@ -25,13 +25,20 @@ def find_paths():
     if os.path.exists(tr_drive) and os.path.exists(te_drive):
         return tr_drive, te_drive, "drive/DATA-NEW"
 
+    # Try improved features first (leakage-safe pipeline)
     proj_data = os.path.join(here, "data")
+    tr_repo_improved = os.path.join(proj_data, "features_for_clustering_train_improved.csv")
+    te_repo_improved = os.path.join(proj_data, "features_for_clustering_test_improved.csv")
+    if os.path.exists(tr_repo_improved) and os.path.exists(te_repo_improved):
+        return tr_repo_improved, te_repo_improved, "repo/data (improved)"
+    
+    # Fall back to old naming convention
     tr_repo = os.path.join(proj_data, "features_for_clustering_train.csv")
     te_repo = os.path.join(proj_data, "features_for_clustering_test.csv")
     if os.path.exists(tr_repo) and os.path.exists(te_repo):
         return tr_repo, te_repo, "repo/data"
 
-    raise FileNotFoundError("cant find clustering train/test csvs. set HDB_* env or put in drive/DATA-NEW")
+    raise FileNotFoundError("cant find clustering train/test csvs. set HDB_* env or put in drive/DATA-NEW or run: python src/features/leakage_safe_feature_engineering.py")
 
 def read_csv(p):
     df = pd.read_csv(p, low_memory=False)
