@@ -392,7 +392,7 @@ def main():
                         df[col] = df[col].fillna(df[col].median())
             print(f"Filled remaining missing values in {df_name} data")
         else:
-            print(f"✅ {df_name} data has no missing values")
+            print(f"{df_name} data has no missing values")
 
     # Save full feature sets
     print("\n=== Saving feature sets ===")
