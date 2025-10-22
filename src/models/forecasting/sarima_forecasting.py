@@ -10,7 +10,7 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 # Project paths
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(CURRENT_DIR))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR)))
 
 DATA_PATH = os.path.join(PROJECT_ROOT, "data", "clean_data_with_imputation.csv")
 RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")

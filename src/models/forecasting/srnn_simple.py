@@ -21,7 +21,7 @@ np.random.seed(42)
 tf.random.set_seed(42)
 
 # Setup device-independent paths relative to project root
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 DATA_DIR = PROJECT_ROOT / 'data'
 RESULTS_DIR = PROJECT_ROOT / 'results' / 'forecasting'
 MODELS_DIR = PROJECT_ROOT / 'src' / 'models' / 'forecasting'
