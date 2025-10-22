@@ -1,12 +1,17 @@
 """
-Hyperparameter Tuning for Clustering Algorithms
+Hyperparameter Tuning for Clustering Algorithms (IMPROVED VERSION)
 
 This script performs systematic hyperparameter optimization for multiple clustering algorithms:
 - KMeans: Tests different numbers of clusters
 - DBSCAN: Tests epsilon and min_samples combinations
-- Birch: Tests cluster counts and threshold values
-- OPTICS: Tests min_samples, max_eps, and xi parameters
+- Birch: Tests cluster counts, threshold values, AND branching_factor (NEW!)
+- OPTICS: Tests min_samples, max_eps, xi, AND cluster_method ('xi' vs 'dbscan') (NEW!)
 - HDBSCAN: Tests min_cluster_size and min_samples combinations
+
+Key improvements over previous version:
+- Birch now tests branching_factor parameter (30, 50, 70)
+- OPTICS now tests both cluster_method options ('xi' and 'dbscan')
+- More comprehensive parameter grid (expanded from ~200 to ~400+ configurations)
 
 Evaluates each configuration using:
 - Silhouette Score (higher = better cluster separation)
@@ -108,32 +113,34 @@ for eps in tqdm([0.3, 0.5, 0.7, 1.0, 1.5], desc="DBSCAN tuning"):
                 ch = calinski_harabasz_score(X[mask], labels[mask])
                 results.append({"Model": "DBSCAN", "Param": f"eps={eps},min={min_samp}", "Silhouette": sil, "DBI": dbi, "Calinski_Harabasz": ch})
 
-# Birch tuning
-for k in tqdm(range(2, 10), desc="Birch tuning"):
-    for thresh in [0.3, 0.5, 0.7]:
-        model = Birch(n_clusters=k, threshold=thresh)
-        labels = model.fit_predict(X)
-        if len(set(labels)) > 1:
-            sil = silhouette_score(X, labels)
-            dbi = davies_bouldin_score(X, labels)
-            ch = calinski_harabasz_score(X, labels)
-            results.append({"Model": "Birch", "Param": f"k={k},thr={thresh}", "Silhouette": sil, "DBI": dbi, "Calinski_Harabasz": ch})
-
-# OPTICS tuning
-for min_samp in tqdm([3, 5, 7, 10], desc="OPTICS tuning"):
-    for max_eps in [2.0, 3.0, 5.0, 7.0]:
-        for xi in [0.05, 0.1, 0.15, 0.2]:
-            model = OPTICS(min_samples=min_samp, max_eps=max_eps, xi=xi, cluster_method='xi')
+# Birch tuning (IMPROVED: Added branching_factor and more threshold values)
+for k in tqdm(range(2, 9), desc="Birch tuning"):
+    for thresh in [0.2, 0.3, 0.5, 0.7]:
+        for branch in [30, 50, 70]:
+            model = Birch(n_clusters=k, threshold=thresh, branching_factor=branch)
             labels = model.fit_predict(X)
-            n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-            if n_clusters > 1:
-                # Exclude noise points for metrics
-                mask = labels != -1
-                if mask.sum() > 0 and len(set(labels[mask])) > 1:
-                    sil = silhouette_score(X[mask], labels[mask])
-                    dbi = davies_bouldin_score(X[mask], labels[mask])
-                    ch = calinski_harabasz_score(X[mask], labels[mask])
-                    results.append({"Model": "OPTICS", "Param": f"min={min_samp},eps={max_eps},xi={xi}", "Silhouette": sil, "DBI": dbi, "Calinski_Harabasz": ch})
+            if len(set(labels)) > 1:
+                sil = silhouette_score(X, labels)
+                dbi = davies_bouldin_score(X, labels)
+                ch = calinski_harabasz_score(X, labels)
+                results.append({"Model": "Birch", "Param": f"k={k},thr={thresh},bf={branch}", "Silhouette": sil, "DBI": dbi, "Calinski_Harabasz": ch})
+
+# OPTICS tuning 
+for min_samp in tqdm([3, 5, 8, 10, 15], desc="OPTICS tuning"):
+    for max_eps in [1.0, 1.5, 2.0, 3.0, float('inf')]:
+        for xi in [0.05, 0.1, 0.15, 0.2]:
+            for method in ['xi', 'dbscan']:
+                model = OPTICS(min_samples=min_samp, max_eps=max_eps, xi=xi, cluster_method=method)
+                labels = model.fit_predict(X)
+                n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+                if n_clusters > 1:
+                    # Exclude noise points for metrics
+                    mask = labels != -1
+                    if mask.sum() > 0 and len(set(labels[mask])) > 1:
+                        sil = silhouette_score(X[mask], labels[mask])
+                        dbi = davies_bouldin_score(X[mask], labels[mask])
+                        ch = calinski_harabasz_score(X[mask], labels[mask])
+                        results.append({"Model": "OPTICS", "Param": f"min={min_samp},eps={max_eps if max_eps != float('inf') else 'inf'},xi={xi},method={method}", "Silhouette": sil, "DBI": dbi, "Calinski_Harabasz": ch})
 
 # HDBSCAN tuning
 if HDBSCAN_AVAILABLE:
@@ -225,6 +232,14 @@ best_dbi.to_csv(os.path.join(output_dir, "best_per_model_dbi.csv"), index=False)
 best_ch.to_csv(os.path.join(output_dir, "best_per_model_calinski_harabasz.csv"), index=False)
 best_combined.to_csv(os.path.join(output_dir, "best_per_model_combined.csv"), index=False)
 
+# Count unique models
+n_models = len(results_df['Model'].unique())
+print(f"\n{'='*80}")
+print(f"SUMMARY: Tested {len(results_df)} configurations across {n_models} models")
+if not HDBSCAN_AVAILABLE:
+    print("NOTE: HDBSCAN not available (install with: pip install hdbscan)")
+print(f"{'='*80}")
+
 print("\nBest parameters per model (Silhouette):")
 print(best_sil[["Model", "Param", "Silhouette", "DBI", "Calinski_Harabasz"]])
 
@@ -236,3 +251,11 @@ print(best_ch[["Model", "Param", "Silhouette", "DBI", "Calinski_Harabasz"]])
 
 print("\nBest parameters per model (Combined Score):")
 print(best_combined[["Model", "Param", "Silhouette", "DBI", "Calinski_Harabasz", "CombinedScore"]])
+
+print(f"\n{'='*80}")
+print(f"Models evaluated: {', '.join(sorted(results_df['Model'].unique()))}")
+if HDBSCAN_AVAILABLE:
+    print("All 5 models tested successfully!")
+else:
+    print("4 models tested (HDBSCAN skipped - not installed)")
+print(f"{'='*80}")
