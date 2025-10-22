@@ -1,4 +1,4 @@
-# readme.md
+# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -179,8 +179,3 @@ Core libraries (install via `pip install -r requirements.txt`):
 - **Silhouette Score** (0-1, higher is better): Measures cluster cohesion and separation
 - **Davies-Bouldin Index** (≥0, lower is better): Within-cluster to between-cluster distance ratio
 - **Inertia**: Within-cluster sum of squared distances
-
-**Forecasting:**
-- **MAE** (Mean Absolute Error): Average absolute prediction error
-- **RMSE** (Root Mean Squared Error): Penalizes larger errors more heavily
-- **R² Score** (0-1): Proportion of variance explained by the model
