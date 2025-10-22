@@ -1,481 +1,531 @@
 """
-Comprehensive 5-Algorithm Clustering Comparison for 5G Network Performance Analysis.
-Combines K-Means, DBSCAN, Birch, OPTICS, and HDBSCAN algorithms for unified comparison.
+Standalone Model Comparison - Train & Evaluate 5 Clustering Models
+
+This script independently trains all 5 clustering models with predefined optimal parameters
+and evaluates them on both train and test data WITHOUT requiring tuning.py results.
+
+Models:
+1. KMeans - Partition-based clustering
+2. DBSCAN - Density-based spatial clustering
+3. Birch - Hierarchical clustering with CF tree
+4. OPTICS - Density-based with reachability ordering
+5. HDBSCAN - Hierarchical density-based clustering
+
+Steps:
+1. Load and preprocess train/test data
+2. Train each model with best-known parameters
+3. Evaluate using 3 metrics (Silhouette, DBI, CH)
+4. Calculate combined scores and rankings
+5. Generate visualizations
 """
 
 import os
-import platform
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.cluster import KMeans, DBSCAN, Birch, OPTICS
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import silhouette_score, davies_bouldin_score, adjusted_rand_score
-from tqdm import tqdm
-import multiprocessing
+from sklearn.cluster import KMeans, DBSCAN, Birch, OPTICS
+from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+from sklearn.neighbors import NearestNeighbors
+from sklearn.decomposition import PCA
 
 try:
     import hdbscan
     HDBSCAN_AVAILABLE = True
 except ImportError:
     HDBSCAN_AVAILABLE = False
-    print("HDBSCAN not available. Install with: pip install hdbscan")
+    print("WARNING: HDBSCAN not available. Install with: conda install -c conda-forge hdbscan")
 
-# Config paths
-_HERE = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
-DATA_PATH = os.path.join(PROJECT_ROOT, 'data')
-OUTPUT_PATH = os.path.join(PROJECT_ROOT, 'results', 'clustering')
+# Setup paths
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+DATA_PATH = os.path.join(PROJECT_ROOT, "data")
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "results", "clustering", "standalone_comparison")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-os.makedirs(OUTPUT_PATH, exist_ok=True)
-
-# Detect system specs
-N_CORES = multiprocessing.cpu_count()
-IS_M_SERIES = platform.system() == 'Darwin' and platform.machine() == 'arm64'
-
-if IS_M_SERIES:
-    print(f"M-Series chip detected ({N_CORES} cores) - Using optimized algorithms")
-else:
-    print(f"Standard architecture detected ({N_CORES} cores)")
+print("="*80)
+print("STANDALONE MODEL COMPARISON - 5 CLUSTERING ALGORITHMS")
+print("="*80)
 
 
-def load_and_prepare_data():
-    """Load and prepare data with zone-level aggregation."""
-    print("\n=== DATA LOADING & PREPARATION ===")
+def load_data():
+    """Load and preprocess train/test data."""
+    print("\n=== Loading Data ===")
+    train_path = os.path.join(DATA_PATH, "features_for_clustering_train_improved.csv")
+    test_path = os.path.join(DATA_PATH, "features_for_clustering_test_improved.csv")
     
-    # Load data
-    input_path = os.path.join(DATA_PATH, 'features_for_clustering.csv')
-    if not os.path.exists(input_path):
-        raise FileNotFoundError(f"Data file not found at {input_path}")
+    if not os.path.exists(train_path) or not os.path.exists(test_path):
+        raise FileNotFoundError(f"Data files not found in {DATA_PATH}")
     
-    df = pd.read_csv(input_path, low_memory=False)
-    print(f"Loaded {len(df):,} network measurements")
+    train_df = pd.read_csv(train_path)
+    test_df = pd.read_csv(test_path)
+    print(f"Loaded TRAIN: {train_df.shape}, TEST: {test_df.shape}")
     
-    # Zone-level aggregation (consistent with main.py and main2.py)
-    if 'square_id' in df.columns:
-        print("Aggregating by zones (square_id)...")
-        zone_agg = df.groupby('square_id').agg({
-            'latitude': 'mean',
-            'longitude': 'mean',
-            'avg_latency': 'mean', 
-            'std_latency': 'mean',
-            'total_throughput': 'mean',
-            'zone_avg_latency': 'first',
-            'zone_avg_upload': 'first', 
-            'zone_avg_download': 'first'
+    # Aggregate by square_id for zone-level analysis
+    if "square_id" in train_df.columns:
+        print("Aggregating by square_id for zone-level features...")
+        train_df = train_df.groupby("square_id").agg({
+            "latitude": "mean",
+            "longitude": "mean",
+            "avg_latency": "mean",
+            "std_latency": "mean",
+            "total_throughput": "mean",
+            "zone_avg_latency": "first",
+            "zone_avg_upload": "first",
+            "zone_avg_download": "first"
         }).reset_index()
         
-        print(f"Aggregated to {len(zone_agg):,} zones")
-        df = zone_agg
+        test_df = test_df.groupby("square_id").agg({
+            "latitude": "mean",
+            "longitude": "mean",
+            "avg_latency": "mean",
+            "std_latency": "mean",
+            "total_throughput": "mean",
+            "zone_avg_latency": "first",
+            "zone_avg_upload": "first",
+            "zone_avg_download": "first"
+        }).reset_index()
+        print(f"After aggregation - TRAIN: {train_df.shape}, TEST: {test_df.shape}")
     
-    # Feature selection (same as teammate's approach)
-    feature_cols = [
-        'latitude', 'longitude',
-        'avg_latency', 'std_latency', 'total_throughput', 
-        'zone_avg_latency', 'zone_avg_upload', 'zone_avg_download'
-    ]
-    feature_cols = [col for col in feature_cols if col in df.columns]
-    print(f"Selected features: {feature_cols}")
+    # Select feature columns
+    feature_cols = ["latitude", "longitude", "avg_latency", "std_latency", 
+                   "total_throughput", "zone_avg_latency", "zone_avg_upload", "zone_avg_download"]
+    feature_cols = [c for c in feature_cols if c in train_df.columns]
+    print(f"Using {len(feature_cols)} features: {feature_cols}")
     
-    # Prepare features
-    X = df[feature_cols].fillna(0)
+    # Scale features
+    X_train = train_df[feature_cols].fillna(0).values
+    X_test = test_df[feature_cols].fillna(0).values
+    
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
     
-    print(f"Prepared dataset: {X_scaled.shape[0]} zones with {X_scaled.shape[1]} features")
-    return X_scaled, feature_cols, df
+    print(f"Scaled - TRAIN: {X_train_scaled.shape}, TEST: {X_test_scaled.shape}")
+    
+    return X_train_scaled, X_test_scaled, train_df, test_df, feature_cols
 
 
-def run_kmeans_analysis(X):
-    """Run K-Means with elbow method optimization."""
-    print("K-Means clustering...", end=" ")
+def assign_test_to_clusters(X_train, labels_train, X_test):
+    """Assign test data to clusters using KNN (for density-based models)."""
+    mask = labels_train != -1
+    X_train_valid = X_train[mask]
+    labels_train_valid = labels_train[mask]
     
-    # Elbow method to find optimal k
-    silhouette_scores = []
-    K_range = range(2, 8)
+    if len(X_train_valid) == 0:
+        return np.full(len(X_test), -1)
     
-    algorithm = 'lloyd' if IS_M_SERIES else 'elkan'
+    knn = NearestNeighbors(n_neighbors=1)
+    knn.fit(X_train_valid)
+    distances, indices = knn.kneighbors(X_test)
+    labels_test = labels_train_valid[indices.flatten()]
     
-    for k in K_range:
-        kmeans = KMeans(n_clusters=k, random_state=42, algorithm=algorithm)
-        labels = kmeans.fit_predict(X)
-        sil_score = silhouette_score(X, labels)
-        silhouette_scores.append(sil_score)
-    
-    optimal_k = K_range[np.argmax(silhouette_scores)]
-    best_score = max(silhouette_scores)
-    
-    # Final K-Means with optimal k
-    kmeans = KMeans(n_clusters=optimal_k, random_state=42, algorithm=algorithm)
-    labels = kmeans.fit_predict(X)
-    
-    print(f"✓ {optimal_k} clusters, Score: {best_score:.3f}")
-    return labels, optimal_k, best_score
+    return labels_test
 
 
-def run_dbscan_analysis(X):
-    """Run DBSCAN with optimized parameters for zone data."""
-    print("DBSCAN clustering...", end=" ")
+def safe_metrics(X, labels):
+    """Calculate metrics, handling outliers."""
+    mask = labels != -1
+    n_valid = mask.sum()
+    n_outliers = (~mask).sum()
+    n_clusters = len(set(labels[mask])) if n_valid > 0 else 0
     
-    n_jobs = N_CORES if IS_M_SERIES else 1
+    metrics = {
+        'n_clusters': n_clusters,
+        'n_outliers': n_outliers,
+        'outlier_pct': (n_outliers / len(labels)) * 100,
+        'silhouette': np.nan,
+        'davies_bouldin': np.nan,
+        'calinski_harabasz': np.nan
+    }
     
-    dbscan = DBSCAN(eps=1.5, min_samples=5, n_jobs=n_jobs)
-    labels = dbscan.fit_predict(X)
-    
-    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    n_noise = np.sum(labels == -1)
-    
-    # Calculate silhouette score (excluding noise)
-    sil_score = None
-    if n_clusters > 1:
-        mask = labels != -1
-        if np.sum(mask) > 0:
-            sil_score = silhouette_score(X[mask], labels[mask])
-    
-    score_text = f"Score: {sil_score:.3f}" if sil_score else "Score: N/A"
-    print(f"✓ {n_clusters} clusters, {n_noise} outliers, {score_text}")
-    
-    return labels, n_clusters, sil_score
-
-
-def run_birch_analysis(X):
-    """Run Birch clustering with parameter optimization."""
-    print("Birch clustering...", end=" ")
-    
-    # Test different cluster numbers
-    cluster_range = range(2, 7)
-    best_score = -1
-    best_k = 3
-    
-    for k in cluster_range:
-        birch = Birch(n_clusters=k, threshold=0.3, branching_factor=50)
-        labels = birch.fit_predict(X)
-        
+    if n_valid > 1 and n_clusters > 1:
         try:
-            db_score = davies_bouldin_score(X, labels)
-            eval_score = 1.0 / (1.0 + db_score)  # Convert to higher-is-better
-            if eval_score > best_score:
-                best_score = eval_score
-                best_k = k
+            metrics['silhouette'] = silhouette_score(X[mask], labels[mask])
         except:
-            continue
+            pass
+        try:
+            metrics['davies_bouldin'] = davies_bouldin_score(X[mask], labels[mask])
+        except:
+            pass
+        try:
+            metrics['calinski_harabasz'] = calinski_harabasz_score(X[mask], labels[mask])
+        except:
+            pass
     
-    # Final Birch model
-    birch = Birch(n_clusters=best_k, threshold=0.3, branching_factor=50)
-    labels = birch.fit_predict(X)
-    
-    print(f"✓ {best_k} clusters, Score: {best_score:.3f}")
-    return labels, best_k, best_score
+    return metrics
 
 
-def run_optics_analysis(X):
-    """Run OPTICS clustering with optimized parameters."""
-    print("OPTICS clustering...", end=" ")
+def train_all_models(X_train, X_test):
+    """Train all 5 models with optimal parameters."""
+    print("\n=== Training All Models ===")
     
-    optics = OPTICS(min_samples=5, max_eps=2.0, cluster_method='xi', 
-                   xi=0.1, n_jobs=-1)
-    labels = optics.fit_predict(X)
+    results = []
+    models_data = {}
     
-    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    n_noise = np.sum(labels == -1)
+    # 1. KMeans
+    print("\n[1/5] Training KMeans...")
+    params_kmeans = {'n_clusters': 2}
+    model = KMeans(n_clusters=params_kmeans['n_clusters'], random_state=42)
+    labels_train = model.fit_predict(X_train)
+    labels_test = model.predict(X_test)
     
-    # Calculate silhouette score (excluding noise)
-    sil_score = None
-    if n_clusters > 1:
-        mask = labels != -1
-        if np.sum(mask) > 0:
-            sil_score = silhouette_score(X[mask], labels[mask])
+    metrics_train = safe_metrics(X_train, labels_train)
+    metrics_test = safe_metrics(X_test, labels_test)
     
-    score_text = f"Score: {sil_score:.3f}" if sil_score else "Score: N/A"
-    print(f"✓ {n_clusters} clusters, {n_noise} outliers, {score_text}")
+    results.append({
+        'Model': 'KMeans',
+        'Params': f"k={params_kmeans['n_clusters']}",
+        'Train_Silhouette': metrics_train['silhouette'],
+        'Test_Silhouette': metrics_test['silhouette'],
+        'Train_DBI': metrics_train['davies_bouldin'],
+        'Test_DBI': metrics_test['davies_bouldin'],
+        'Train_CH': metrics_train['calinski_harabasz'],
+        'Test_CH': metrics_test['calinski_harabasz'],
+        'Train_Clusters': metrics_train['n_clusters'],
+        'Test_Clusters': metrics_test['n_clusters'],
+        'Train_Outliers': metrics_train['n_outliers'],
+        'Test_Outliers': metrics_test['n_outliers']
+    })
     
-    return labels, n_clusters, sil_score
-
-
-def run_hdbscan_analysis(X):
-    """Run HDBSCAN clustering with optimized parameters."""
-    if not HDBSCAN_AVAILABLE:
-        print("HDBSCAN clustering... ✗ Package not available")
-        return np.zeros(len(X)), 0, None
+    models_data['KMeans'] = {'train_labels': labels_train, 'test_labels': labels_test}
+    print(f"  Train: Sil={metrics_train['silhouette']:.3f}, DBI={metrics_train['davies_bouldin']:.3f}, CH={metrics_train['calinski_harabasz']:.1f}")
+    print(f"  Test:  Sil={metrics_test['silhouette']:.3f}, DBI={metrics_test['davies_bouldin']:.3f}, CH={metrics_test['calinski_harabasz']:.1f}")
     
-    print("HDBSCAN clustering...", end=" ")
+    # 2. DBSCAN
+    print("\n[2/5] Training DBSCAN...")
+    params_dbscan = {'eps': 0.5, 'min_samples': 3}
+    model = DBSCAN(eps=params_dbscan['eps'], min_samples=params_dbscan['min_samples'])
+    labels_train = model.fit_predict(X_train)
+    labels_test = assign_test_to_clusters(X_train, labels_train, X_test)
     
-    hdb = hdbscan.HDBSCAN(
-        min_cluster_size=8,
-        min_samples=5,
-        cluster_selection_epsilon=0.0,
-        cluster_selection_method="eom",
-        core_dist_n_jobs=-1
-    )
-    labels = hdb.fit_predict(X)
+    metrics_train = safe_metrics(X_train, labels_train)
+    metrics_test = safe_metrics(X_test, labels_test)
     
-    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    n_noise = np.sum(labels == -1)
+    results.append({
+        'Model': 'DBSCAN',
+        'Params': f"eps={params_dbscan['eps']},min={params_dbscan['min_samples']}",
+        'Train_Silhouette': metrics_train['silhouette'],
+        'Test_Silhouette': metrics_test['silhouette'],
+        'Train_DBI': metrics_train['davies_bouldin'],
+        'Test_DBI': metrics_test['davies_bouldin'],
+        'Train_CH': metrics_train['calinski_harabasz'],
+        'Test_CH': metrics_test['calinski_harabasz'],
+        'Train_Clusters': metrics_train['n_clusters'],
+        'Test_Clusters': metrics_test['n_clusters'],
+        'Train_Outliers': metrics_train['n_outliers'],
+        'Test_Outliers': metrics_test['n_outliers']
+    })
     
-    # Calculate silhouette score (excluding noise)
-    sil_score = None
-    if n_clusters > 1:
-        mask = labels != -1
-        if np.sum(mask) > 0:
-            sil_score = silhouette_score(X[mask], labels[mask])
+    models_data['DBSCAN'] = {'train_labels': labels_train, 'test_labels': labels_test}
+    print(f"  Train: Sil={metrics_train['silhouette']:.3f}, Clusters={metrics_train['n_clusters']}, Outliers={metrics_train['n_outliers']}")
+    print(f"  Test:  Sil={metrics_test['silhouette']:.3f}, Clusters={metrics_test['n_clusters']}, Outliers={metrics_test['n_outliers']}")
     
-    score_text = f"Score: {sil_score:.3f}" if sil_score else "Score: N/A"
-    print(f"✓ {n_clusters} clusters, {n_noise} outliers, {score_text}")
+    # 3. Birch
+    print("\n[3/5] Training Birch...")
+    params_birch = {'n_clusters': 2, 'threshold': 0.2, 'branching_factor': 70}
+    model = Birch(n_clusters=params_birch['n_clusters'], 
+                 threshold=params_birch['threshold'],
+                 branching_factor=params_birch['branching_factor'])
+    labels_train = model.fit_predict(X_train)
+    labels_test = model.predict(X_test)
     
-    return labels, n_clusters, sil_score
-
-
-def create_comparison_visualization(X, all_labels, feature_names):
-    """Create 2x3 comparison visualization of all 5 algorithms."""
-    print("Creating visualizations...", end=" ")
+    metrics_train = safe_metrics(X_train, labels_train)
+    metrics_test = safe_metrics(X_test, labels_test)
     
-    # Use 2x3 layout for 5 algorithms
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    algorithms = ['K-Means', 'DBSCAN', 'Birch', 'OPTICS', 'HDBSCAN']
+    results.append({
+        'Model': 'Birch',
+        'Params': f"k={params_birch['n_clusters']},thr={params_birch['threshold']},bf={params_birch['branching_factor']}",
+        'Train_Silhouette': metrics_train['silhouette'],
+        'Test_Silhouette': metrics_test['silhouette'],
+        'Train_DBI': metrics_train['davies_bouldin'],
+        'Test_DBI': metrics_test['davies_bouldin'],
+        'Train_CH': metrics_train['calinski_harabasz'],
+        'Test_CH': metrics_test['calinski_harabasz'],
+        'Train_Clusters': metrics_train['n_clusters'],
+        'Test_Clusters': metrics_test['n_clusters'],
+        'Train_Outliers': metrics_train['n_outliers'],
+        'Test_Outliers': metrics_test['n_outliers']
+    })
     
-    for i, (algo, labels) in enumerate(zip(algorithms, all_labels)):
-        row, col = i // 3, i % 3
-        ax = axes[row, col]
-        
-        if algo in ['DBSCAN', 'OPTICS', 'HDBSCAN'] and -1 in labels:
-            # Handle algorithms with outliers
-            noise_mask = labels == -1
-            cluster_mask = labels != -1
-            
-            if np.sum(noise_mask) > 0:
-                ax.scatter(X[noise_mask, 0], X[noise_mask, 1], 
-                          c='lightgray', alpha=0.6, s=30, label='Outliers')
-            
-            if np.sum(cluster_mask) > 0:
-                scatter = ax.scatter(X[cluster_mask, 0], X[cluster_mask, 1], 
-                                   c=labels[cluster_mask], cmap='Set3', 
-                                   alpha=0.7, s=30)
-            
-            n_clusters = len(set(labels)) - 1
-            n_outliers = np.sum(noise_mask)
-            ax.set_title(f'{algo}\n{n_clusters} clusters, {n_outliers} outliers', 
-                        fontweight='bold')
-            
-            if np.sum(noise_mask) > 0:
-                ax.legend()
-        else:
-            # Regular clustering without outliers
-            scatter = ax.scatter(X[:, 0], X[:, 1], c=labels, cmap='Set3', 
-                               alpha=0.7, s=30)
-            n_clusters = len(set(labels))
-            ax.set_title(f'{algo}\n{n_clusters} clusters', fontweight='bold')
-        
-        ax.set_xlabel(feature_names[0] if len(feature_names) > 0 else 'Feature 1')
-        ax.set_ylabel(feature_names[1] if len(feature_names) > 1 else 'Feature 2')
-        ax.grid(True, alpha=0.3)
+    models_data['Birch'] = {'train_labels': labels_train, 'test_labels': labels_test}
+    print(f"  Train: Sil={metrics_train['silhouette']:.3f}, DBI={metrics_train['davies_bouldin']:.3f}, CH={metrics_train['calinski_harabasz']:.1f}")
+    print(f"  Test:  Sil={metrics_test['silhouette']:.3f}, DBI={metrics_test['davies_bouldin']:.3f}, CH={metrics_test['calinski_harabasz']:.1f}")
     
-    # Hide the unused subplot (bottom right)
-    axes[1, 2].axis('off')
+    # 4. OPTICS
+    print("\n[4/5] Training OPTICS...")
+    params_optics = {'min_samples': 5, 'max_eps': np.inf, 'xi': 0.2, 'cluster_method': 'xi'}
+    model = OPTICS(min_samples=params_optics['min_samples'],
+                  max_eps=params_optics['max_eps'],
+                  xi=params_optics['xi'],
+                  cluster_method=params_optics['cluster_method'])
+    labels_train = model.fit_predict(X_train)
+    labels_test = assign_test_to_clusters(X_train, labels_train, X_test)
     
-    plt.tight_layout()
+    metrics_train = safe_metrics(X_train, labels_train)
+    metrics_test = safe_metrics(X_test, labels_test)
     
-    # Save comparison chart
-    output_path = os.path.join(OUTPUT_PATH, 'all_algorithms_comparison.png')
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    print("✓ Comparison chart saved")
-    plt.close()
-
-
-def calculate_algorithm_similarity(all_labels):
-    """Calculate Adjusted Rand Index between algorithms."""
-    print("Calculating similarity matrix...", end=" ")
+    results.append({
+        'Model': 'OPTICS',
+        'Params': f"min={params_optics['min_samples']},eps=inf,xi={params_optics['xi']},method={params_optics['cluster_method']}",
+        'Train_Silhouette': metrics_train['silhouette'],
+        'Test_Silhouette': metrics_test['silhouette'],
+        'Train_DBI': metrics_train['davies_bouldin'],
+        'Test_DBI': metrics_test['davies_bouldin'],
+        'Train_CH': metrics_train['calinski_harabasz'],
+        'Test_CH': metrics_test['calinski_harabasz'],
+        'Train_Clusters': metrics_train['n_clusters'],
+        'Test_Clusters': metrics_test['n_clusters'],
+        'Train_Outliers': metrics_train['n_outliers'],
+        'Test_Outliers': metrics_test['n_outliers']
+    })
     
-    algorithms = ['K-Means', 'DBSCAN', 'Birch', 'OPTICS', 'HDBSCAN']
-    similarity_matrix = np.zeros((5, 5))
+    models_data['OPTICS'] = {'train_labels': labels_train, 'test_labels': labels_test}
+    print(f"  Train: Sil={metrics_train['silhouette']:.3f}, Clusters={metrics_train['n_clusters']}, Outliers={metrics_train['n_outliers']}")
+    print(f"  Test:  Sil={metrics_test['silhouette']:.3f}, Clusters={metrics_test['n_clusters']}, Outliers={metrics_test['n_outliers']}")
     
-    for i in range(5):
-        for j in range(5):
-            if i == j:
-                similarity_matrix[i, j] = 1.0
-            else:
-                ari = adjusted_rand_score(all_labels[i], all_labels[j])
-                similarity_matrix[i, j] = ari
-    
-    # Create similarity heatmap
-    fig, ax = plt.subplots(figsize=(8, 6))
-    im = ax.imshow(similarity_matrix, cmap='YlOrRd', vmin=0, vmax=1)
-    
-    # Add labels and values
-    ax.set_xticks(range(5))
-    ax.set_yticks(range(5))
-    ax.set_xticklabels(algorithms, rotation=45)
-    ax.set_yticklabels(algorithms)
-    
-    # Add text annotations
-    for i in range(5):
-        for j in range(5):
-            text = ax.text(j, i, f'{similarity_matrix[i, j]:.3f}',
-                          ha="center", va="center", color="black", fontweight='bold')
-    
-    ax.set_title('Algorithm Similarity Matrix\n(Adjusted Rand Index)', 
-                fontweight='bold', fontsize=14)
-    plt.colorbar(im, label='Similarity Score')
-    
-    plt.tight_layout()
-    output_path = os.path.join(OUTPUT_PATH, 'algorithm_similarity_matrix.png')
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    print("✓ Similarity matrix saved")
-    plt.close()
-    
-    return similarity_matrix
-
-
-def save_combined_results(df, all_labels):
-    """Save combined results with all algorithm labels."""
-    print("Saving combined results...", end=" ")
-    
-    results_df = df.copy()
-    algorithms = ['kmeans', 'dbscan', 'birch', 'optics', 'hdbscan']
-    
-    for algo, labels in zip(algorithms, all_labels):
-        results_df[f'{algo}_cluster'] = labels
-    
-    output_file = os.path.join(OUTPUT_PATH, 'all_algorithms_results.csv')
-    results_df.to_csv(output_file, index=False)
-    print("✓ Combined CSV saved")
-
-
-def create_performance_summary_chart(all_metrics):
-    """Create performance summary chart as PNG for assignment requirements."""
-    print("Creating performance summary chart...", end=" ")
-    
-    algorithms = ['K-Means', 'DBSCAN', 'Birch', 'OPTICS', 'HDBSCAN']
-    clusters = [metrics[0] for metrics in all_metrics]
-    scores = [metrics[1] for metrics in all_metrics]
-    
-    # Create figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-    
-    # Left chart: Number of clusters
-    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFA07A']
-    bars1 = ax1.bar(algorithms, clusters, color=colors, alpha=0.8)
-    ax1.set_title('Number of Clusters Found', fontweight='bold', fontsize=14)
-    ax1.set_ylabel('Number of Clusters', fontweight='bold')
-    ax1.grid(True, alpha=0.3)
-    
-    # Add value labels on bars
-    for bar, cluster in zip(bars1, clusters):
-        height = bar.get_height()
-        ax1.text(bar.get_x() + bar.get_width()/2., height + 0.1,
-                f'{cluster}', ha='center', va='bottom', fontweight='bold')
-    
-    # Right chart: Quality scores
-    bars2 = ax2.bar(algorithms, scores, color=colors, alpha=0.8)
-    ax2.set_title('Clustering Quality Scores', fontweight='bold', fontsize=14)
-    ax2.set_ylabel('Quality Score (Higher = Better)', fontweight='bold')
-    ax2.grid(True, alpha=0.3)
-    ax2.set_ylim(0, max(scores) * 1.1)
-    
-    # Add value labels on bars
-    for bar, score in zip(bars2, scores):
-        height = bar.get_height()
-        ax2.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                f'{score:.3f}', ha='center', va='bottom', fontweight='bold')
-    
-    # Add summary statistics text box
-    summary_text = f"""Algorithm Performance Ranking:
-1. HDBSCAN: {scores[4]:.3f} (Hierarchical Density-Based)
-2. OPTICS: {scores[3]:.3f} (Density Ordering)
-3. DBSCAN: {scores[1]:.3f} (Good Outlier Detection) 
-4. Birch: {scores[2]:.3f} (Balanced Approach)
-5. K-Means: {scores[0]:.3f} (Simple Partitioning)
-
-Total Zones Analyzed: 299
-Data Reduction: 2.4M → 299 zones (99.99%)"""
-    
-    fig.text(0.02, 0.02, summary_text, fontsize=10, 
-             bbox=dict(boxstyle="round,pad=0.5", facecolor="lightgray", alpha=0.8))
-    
-    plt.tight_layout()
-    plt.subplots_adjust(bottom=0.25)  # Make room for summary text
-    
-    # Save performance summary chart
-    output_path = os.path.join(OUTPUT_PATH, 'performance_summary.png')
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    print("✓ Performance summary chart saved")
-    plt.close()
-
-
-def generate_summary_report(all_metrics):
-    """Generate comprehensive summary report."""
-    print("\n" + "=" * 80)
-    algorithm_count = "5-ALGORITHM" if HDBSCAN_AVAILABLE else "4-ALGORITHM"
-    print(f"COMPREHENSIVE {algorithm_count} CLUSTERING COMPARISON REPORT")
-    print("=" * 80)
-    
-    algorithms = ['K-Means', 'DBSCAN', 'Birch', 'OPTICS', 'HDBSCAN']
-    
-    print("\nALGORITHM PERFORMANCE SUMMARY:")
-    print("-" * 50)
-    
-    for i, algo in enumerate(algorithms):
-        clusters, score = all_metrics[i]
-        print(f"{algo:10} | Clusters: {clusters:2} | Quality Score: {score:.3f}")
-    
-    print("\nALGORITHM CHARACTERISTICS:")
-    print("-" * 50)
-    print("K-Means   : Balanced partitioning, performance-based zones")
-    print("DBSCAN    : Density-based, identifies outliers")  
-    print("Birch     : Memory efficient, hierarchical structure")
-    print("OPTICS    : Natural clusters, automatic parameter selection")
+    # 5. HDBSCAN
     if HDBSCAN_AVAILABLE:
-        print("HDBSCAN   : Hierarchical density-based, robust outlier detection")
+        print("\n[5/5] Training HDBSCAN...")
+        params_hdbscan = {'min_cluster_size': 5, 'min_samples': 3}
+        model = hdbscan.HDBSCAN(min_cluster_size=params_hdbscan['min_cluster_size'],
+                               min_samples=params_hdbscan['min_samples'],
+                               cluster_selection_method='eom')
+        labels_train = model.fit_predict(X_train)
+        labels_test = assign_test_to_clusters(X_train, labels_train, X_test)
+        
+        metrics_train = safe_metrics(X_train, labels_train)
+        metrics_test = safe_metrics(X_test, labels_test)
+        
+        results.append({
+            'Model': 'HDBSCAN',
+            'Params': f"mcs={params_hdbscan['min_cluster_size']},ms={params_hdbscan['min_samples']}",
+            'Train_Silhouette': metrics_train['silhouette'],
+            'Test_Silhouette': metrics_test['silhouette'],
+            'Train_DBI': metrics_train['davies_bouldin'],
+            'Test_DBI': metrics_test['davies_bouldin'],
+            'Train_CH': metrics_train['calinski_harabasz'],
+            'Test_CH': metrics_test['calinski_harabasz'],
+            'Train_Clusters': metrics_train['n_clusters'],
+            'Test_Clusters': metrics_test['n_clusters'],
+            'Train_Outliers': metrics_train['n_outliers'],
+            'Test_Outliers': metrics_test['n_outliers']
+        })
+        
+        models_data['HDBSCAN'] = {'train_labels': labels_train, 'test_labels': labels_test}
+        print(f"  Train: Sil={metrics_train['silhouette']:.3f}, Clusters={metrics_train['n_clusters']}, Outliers={metrics_train['n_outliers']}")
+        print(f"  Test:  Sil={metrics_test['silhouette']:.3f}, Clusters={metrics_test['n_clusters']}, Outliers={metrics_test['n_outliers']}")
+    else:
+        print("\n[5/5] HDBSCAN skipped - not installed")
     
-    print(f"\nOUTPUT FILES GENERATED:")
-    print("-" * 50)
-    comparison_desc = "2x3 visual comparison (5 algorithms)" if HDBSCAN_AVAILABLE else "2x2 visual comparison (4 algorithms)"
-    print(f"• all_algorithms_comparison.png     - {comparison_desc}")
-    print("• algorithm_similarity_matrix.png   - Algorithm similarity heatmap") 
-    print("• performance_summary.png           - Performance summary chart")
-    print("• all_algorithms_results.csv        - Combined clustering results")
+    return pd.DataFrame(results), models_data
+
+
+def calculate_rankings(results_df):
+    """Calculate normalized combined scores and rankings."""
+    print("\n=== Calculating Rankings ===")
     
-    print("\n" + "=" * 80)
+    # Normalize metrics to 0-1 scale
+    results_ranked = results_df.copy()
+    
+    # Silhouette: higher is better
+    sil_min = results_df['Test_Silhouette'].min()
+    sil_max = results_df['Test_Silhouette'].max()
+    results_ranked['Sil_Normalized'] = (results_df['Test_Silhouette'] - sil_min) / (sil_max - sil_min) if sil_max > sil_min else 0
+    
+    # DBI: lower is better, so invert
+    dbi_min = results_df['Test_DBI'].min()
+    dbi_max = results_df['Test_DBI'].max()
+    results_ranked['DBI_Normalized'] = 1 - ((results_df['Test_DBI'] - dbi_min) / (dbi_max - dbi_min)) if dbi_max > dbi_min else 0
+    
+    # CH: higher is better
+    ch_min = results_df['Test_CH'].min()
+    ch_max = results_df['Test_CH'].max()
+    results_ranked['CH_Normalized'] = (results_df['Test_CH'] - ch_min) / (ch_max - ch_min) if ch_max > ch_min else 0
+    
+    # Combined score: weighted average
+    results_ranked['Combined_Score'] = (
+        results_ranked['Sil_Normalized'] * 0.40 +
+        results_ranked['DBI_Normalized'] * 0.30 +
+        results_ranked['CH_Normalized'] * 0.30
+    )
+    
+    # Sort by combined score
+    results_ranked = results_ranked.sort_values('Combined_Score', ascending=False)
+    
+    print("\nRanking Methodology:")
+    print("  - Silhouette Score: 40% weight (higher better)")
+    print("  - Davies-Bouldin Index: 30% weight (lower better, inverted)")
+    print("  - Calinski-Harabasz: 30% weight (higher better)")
+    print("  - All metrics normalized to 0-1 scale")
+    
+    return results_ranked
+
+
+def visualize_comparison(X_train, X_test, models_data, results_df):
+    """Create comparison visualizations."""
+    print("\n=== Generating Visualizations ===")
+    
+    # PCA for 2D projection
+    pca = PCA(n_components=2, random_state=42)
+    X_train_2d = pca.fit_transform(X_train)
+    X_test_2d = pca.transform(X_test)
+    
+    n_models = len(models_data)
+    
+    # Cluster visualizations
+    fig, axes = plt.subplots(2, n_models, figsize=(5*n_models, 10))
+    if n_models == 1:
+        axes = axes.reshape(2, 1)
+    
+    for idx, (model_name, data) in enumerate(models_data.items()):
+        # Train
+        ax_train = axes[0, idx]
+        labels_train = data['train_labels']
+        scatter = ax_train.scatter(X_train_2d[:, 0], X_train_2d[:, 1], 
+                                  c=labels_train, cmap='tab10', alpha=0.6, s=30)
+        ax_train.set_title(f"{model_name} - TRAIN\n{len(set(labels_train))-1 if -1 in labels_train else len(set(labels_train))} clusters", 
+                          fontsize=12)
+        ax_train.set_xlabel("PC1")
+        ax_train.set_ylabel("PC2")
+        plt.colorbar(scatter, ax=ax_train)
+        
+        # Test
+        ax_test = axes[1, idx]
+        labels_test = data['test_labels']
+        scatter = ax_test.scatter(X_test_2d[:, 0], X_test_2d[:, 1], 
+                                c=labels_test, cmap='tab10', alpha=0.6, s=30)
+        ax_test.set_title(f"{model_name} - TEST\n{len(set(labels_test))-1 if -1 in labels_test else len(set(labels_test))} clusters", 
+                         fontsize=12)
+        ax_test.set_xlabel("PC1")
+        ax_test.set_ylabel("PC2")
+        plt.colorbar(scatter, ax=ax_test)
+    
+    plt.tight_layout()
+    vis_path = os.path.join(OUTPUT_DIR, "all_models_comparison.png")
+    plt.savefig(vis_path, dpi=150, bbox_inches='tight')
+    print(f"Saved visualization: {vis_path}")
+    plt.close()
+    
+    # Metrics bar charts
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    
+    models = results_df['Model']
+    x = np.arange(len(models))
+    width = 0.35
+    
+    # Silhouette
+    ax = axes[0, 0]
+    ax.bar(x - width/2, results_df['Train_Silhouette'], width, label='Train', alpha=0.8)
+    ax.bar(x + width/2, results_df['Test_Silhouette'], width, label='Test', alpha=0.8)
+    ax.set_ylabel('Silhouette Score')
+    ax.set_title('Silhouette Score (Higher is Better)')
+    ax.set_xticks(x)
+    ax.set_xticklabels(models, rotation=45)
+    ax.legend()
+    ax.grid(axis='y', alpha=0.3)
+    
+    # DBI
+    ax = axes[0, 1]
+    ax.bar(x - width/2, results_df['Train_DBI'], width, label='Train', alpha=0.8)
+    ax.bar(x + width/2, results_df['Test_DBI'], width, label='Test', alpha=0.8)
+    ax.set_ylabel('Davies-Bouldin Index')
+    ax.set_title('Davies-Bouldin Index (Lower is Better)')
+    ax.set_xticks(x)
+    ax.set_xticklabels(models, rotation=45)
+    ax.legend()
+    ax.grid(axis='y', alpha=0.3)
+    
+    # CH
+    ax = axes[1, 0]
+    ax.bar(x - width/2, results_df['Train_CH'], width, label='Train', alpha=0.8)
+    ax.bar(x + width/2, results_df['Test_CH'], width, label='Test', alpha=0.8)
+    ax.set_ylabel('Calinski-Harabasz Score')
+    ax.set_title('Calinski-Harabasz Score (Higher is Better)')
+    ax.set_xticks(x)
+    ax.set_xticklabels(models, rotation=45)
+    ax.legend()
+    ax.grid(axis='y', alpha=0.3)
+    
+    # Cluster count
+    ax = axes[1, 1]
+    ax.bar(x - width/2, results_df['Train_Clusters'], width, label='Train', alpha=0.8)
+    ax.bar(x + width/2, results_df['Test_Clusters'], width, label='Test', alpha=0.8)
+    ax.set_ylabel('Number of Clusters')
+    ax.set_title('Number of Clusters Discovered')
+    ax.set_xticks(x)
+    ax.set_xticklabels(models, rotation=45)
+    ax.legend()
+    ax.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    metrics_path = os.path.join(OUTPUT_DIR, "metrics_comparison.png")
+    plt.savefig(metrics_path, dpi=150, bbox_inches='tight')
+    print(f"Saved metrics comparison: {metrics_path}")
+    plt.close()
 
 
 def main():
-    """Main execution function."""
-    print("=" * 80)
-    algorithm_count = "5-ALGORITHM" if HDBSCAN_AVAILABLE else "4-ALGORITHM"
-    print(f"5G NETWORK PERFORMANCE: {algorithm_count} CLUSTERING COMPARISON")
-    if IS_M_SERIES:
-        print(f"M-Series Optimized Mode ({N_CORES} cores)")
-    else:
-        print(f"Standard Mode ({N_CORES} cores)")
-    print("=" * 80)
+    """Main execution."""
+    # Load data
+    X_train, X_test, train_df, test_df, feature_cols = load_data()
     
-    # Load and prepare data
-    X_scaled, feature_names, df = load_and_prepare_data()
+    # Train all models
+    results_df, models_data = train_all_models(X_train, X_test)
     
-    # Run all algorithms
-    kmeans_labels, kmeans_clusters, kmeans_score = run_kmeans_analysis(X_scaled)
-    dbscan_labels, dbscan_clusters, dbscan_score = run_dbscan_analysis(X_scaled)
-    birch_labels, birch_clusters, birch_score = run_birch_analysis(X_scaled)
-    optics_labels, optics_clusters, optics_score = run_optics_analysis(X_scaled)
-    hdbscan_labels, hdbscan_clusters, hdbscan_score = run_hdbscan_analysis(X_scaled)
+    # Calculate rankings
+    results_ranked = calculate_rankings(results_df)
     
-    # Collect all results
-    all_labels = [kmeans_labels, dbscan_labels, birch_labels, optics_labels, hdbscan_labels]
-    all_metrics = [
-        (kmeans_clusters, kmeans_score or 0),
-        (dbscan_clusters, dbscan_score or 0),
-        (birch_clusters, birch_score or 0), 
-        (optics_clusters, optics_score or 0),
-        (hdbscan_clusters, hdbscan_score or 0)
-    ]
+    # Save results
+    results_path = os.path.join(OUTPUT_DIR, "comparison_results.csv")
+    results_df.to_csv(results_path, index=False)
+    print(f"\nResults saved to: {results_path}")
     
-    # Create visualizations and analysis
-    create_comparison_visualization(X_scaled, all_labels, feature_names)
-    similarity_matrix = calculate_algorithm_similarity(all_labels)
-    create_performance_summary_chart(all_metrics)
-    save_combined_results(df, all_labels)
+    ranked_path = os.path.join(OUTPUT_DIR, "ranked_models.csv")
+    results_ranked[['Model', 'Params', 'Test_Silhouette', 'Test_DBI', 'Test_CH',
+                    'Sil_Normalized', 'DBI_Normalized', 'CH_Normalized', 'Combined_Score']].to_csv(ranked_path, index=False)
+    print(f"Ranked results saved to: {ranked_path}")
     
-    # Generate final report
-    generate_summary_report(all_metrics)
+    # Display results
+    print("\n" + "="*80)
+    print("FINAL RESULTS")
+    print("="*80)
+    print(results_df.to_string(index=False))
+    
+    # Generalization analysis
+    print("\n" + "="*80)
+    print("GENERALIZATION ANALYSIS")
+    print("="*80)
+    for _, row in results_df.iterrows():
+        if not np.isnan(row['Train_Silhouette']) and not np.isnan(row['Test_Silhouette']):
+            ratio = (row['Test_Silhouette'] / row['Train_Silhouette']) * 100
+            print(f"{row['Model']:10s}: {ratio:.1f}% retention (Train={row['Train_Silhouette']:.3f}, Test={row['Test_Silhouette']:.3f})")
+    
+    # Rankings
+    print("\n" + "="*80)
+    print("FINAL RANKING (by Combined Score)")
+    print("="*80)
+    for rank, (idx, row) in enumerate(results_ranked.iterrows(), 1):
+        print(f"{rank}. {row['Model']:10s} - Score: {row['Combined_Score']:.4f} | "
+              f"Sil: {row['Sil_Normalized']:.3f} | DBI: {row['DBI_Normalized']:.3f} | CH: {row['CH_Normalized']:.3f}")
+    
+    # Winner
+    winner = results_ranked.iloc[0]
+    print("\n" + "=" * 40)
+    print(f"WINNER: {winner['Model']}")
+    print(f"Parameters: {winner['Params']}")
+    print(f"Combined Score: {winner['Combined_Score']:.4f}")
+    print(f"  • Silhouette: {winner['Test_Silhouette']:.4f}")
+    print(f"  • DBI: {winner['Test_DBI']:.4f}")
+    print(f"  • CH: {winner['Test_CH']:.4f}")
+    print("=" * 40)
+    
+    # Visualizations
+    visualize_comparison(X_train, X_test, models_data, results_df)
+    
+    print("\n" + "="*80)
+    print("COMPARISON COMPLETE!")
+    print(f"Results saved to: {OUTPUT_DIR}")
+    print("="*80)
 
 
 if __name__ == "__main__":

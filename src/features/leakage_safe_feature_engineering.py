@@ -253,8 +253,8 @@ def create_lag_features_improved(train_df: pd.DataFrame, test_df: pd.DataFrame) 
     lag_cols = [col for col in train_df.columns if col.endswith('_lag1')]
     for col in lag_cols:
         if col in train_df.columns:
-            # Fill missing values with forward fill within each group
-            train_df[col] = train_df.groupby('square_id')[col].fillna(method='ffill')
+            # Fill missing values with forward fill within each group (using ffill instead of fillna)
+            train_df[col] = train_df.groupby('square_id')[col].ffill()
             # For the first record in each group, use the mean of that group
             train_df[col] = train_df.groupby('square_id')[col].transform(
                 lambda x: x.fillna(x.mean()) if not x.isnull().all() else x
@@ -383,16 +383,36 @@ def main():
         missing_count = df.isnull().sum().sum()
         if missing_count > 0:
             print(f"Warning: {df_name} data has {missing_count} missing values")
-            # Fill remaining missing values with median
+            # Fill remaining missing values
             for col in df.columns:
                 if df[col].isnull().any():
                     if df[col].dtype in ['object', 'category']:
-                        df[col] = df[col].fillna(df[col].mode().iloc[0] if not df[col].mode().empty else 'unknown')
+                        # Convert categorical to string first to avoid category errors
+                        if df[col].dtype.name == 'category':
+                            df[col] = df[col].astype(str)
+                        # Fill with mode or 'unknown'
+                        fill_value = df[col].mode().iloc[0] if not df[col].mode().empty else 'unknown'
+                        df[col] = df[col].fillna(fill_value)
                     else:
                         df[col] = df[col].fillna(df[col].median())
             print(f"Filled remaining missing values in {df_name} data")
         else:
-            print(f"✅ {df_name} data has no missing values")
+            print(f"{df_name} data has no missing values")
+
+    # Sort data by day_id to maintain chronological order
+    print("\n=== Sorting data by day_id ===")
+    if day_column and day_column in train_df.columns:
+        hour_col = 'HOUR' if 'HOUR' in train_df.columns else 'hour' if 'hour' in train_df.columns else None
+        if hour_col:
+            train_df = train_df.sort_values([day_column, hour_col, 'square_id']).reset_index(drop=True)
+            test_df = test_df.sort_values([day_column, hour_col, 'square_id']).reset_index(drop=True)
+            print(f"Sorted train and test data by {day_column}, {hour_col}, and square_id")
+        else:
+            train_df = train_df.sort_values([day_column, 'square_id']).reset_index(drop=True)
+            test_df = test_df.sort_values([day_column, 'square_id']).reset_index(drop=True)
+            print(f"Sorted train and test data by {day_column} and square_id")
+    else:
+        print(f"Warning: {day_column} column not found, skipping sorting")
 
     # Save full feature sets
     print("\n=== Saving feature sets ===")

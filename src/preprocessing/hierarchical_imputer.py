@@ -23,7 +23,7 @@ def derive_date_key(df: pd.DataFrame) -> pd.Series:
     """
     if 'date_key' in df.columns:
         return df['date_key'].astype(str)
-    if 'DATES' in df.columns:
+    if 'DATES' in df.columns and df['DATES'].notna().any():
         return pd.to_datetime(df['DATES'], errors='coerce').dt.date.astype(str)
     if 'day_id' in df.columns:
         # Normalize to proper YYYY-MM-DD
