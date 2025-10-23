@@ -1,16 +1,12 @@
 import os
 import pandas as pd
-import numpy as np
-from pathlib import Path
-from tqdm import tqdm
-from typing import Tuple, Dict, List
 
 # Config paths
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(_HERE))
 DATA_PATH = os.path.join(PROJECT_ROOT, 'data')
 
-def load_train_test_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
+def load_train_test_data():
     """Load separate train and test datasets."""
     train_path = os.path.join(DATA_PATH, 'clean_data_with_imputation_train.csv')
     test_path = os.path.join(DATA_PATH, 'clean_data_with_imputation_test.csv')
@@ -28,6 +24,10 @@ def load_train_test_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
     print(f"Loaded train data: {train_df.shape}")
     print(f"Loaded test data: {test_df.shape}")
     
+    # Debug: Show available date-related columns
+    date_cols = [c for c in train_df.columns if any(x in c.lower() for x in ['date', 'day', 'time'])]
+    print(f"Available date-related columns: {date_cols}")
+    
     return train_df, test_df
 
 def extract_temporal_features(df):
@@ -43,7 +43,7 @@ def extract_temporal_features(df):
         df['hour_of_day'] = df[hour_col]
         df['minute'] = df[min_col]
 
-    # Time of day categories - FIXED: Handle edge cases
+    # Time of day categories
     if hour_col:
         # Ensure all values are within the bin range
         hour_values = df[hour_col].clip(lower=0, upper=23.99)
@@ -78,7 +78,7 @@ def extract_network_performance_features(df):
         df['std_latency'] = df[available_latency].std(axis=1)
         df['latency_range'] = df['max_latency'] - df['min_latency']
 
-        # Latency quality categories - FIXED: Handle edge cases
+        # Latency quality categories
         latency_values = df['avg_latency'].fillna(0)  # Fill NaN with 0 for binning
         df['latency_quality'] = pd.cut(latency_values,
                                        bins=[0, 50, 100, 200, float('inf')],
@@ -93,7 +93,7 @@ def extract_network_performance_features(df):
         df['total_throughput'] = df[upload_col] + df[download_col]
         df['upload_download_ratio'] = df[upload_col] / (df[download_col] + 1e-6)  # Avoid division by zero
 
-        # Throughput quality categories - FIXED: Handle edge cases
+        # Throughput quality categories
         throughput_values = df['total_throughput'].fillna(0)  # Fill NaN with 0 for binning
         df['throughput_quality'] = pd.cut(throughput_values,
                                          bins=[0, 10, 50, 100, float('inf')],
@@ -115,7 +115,7 @@ def extract_spatial_features(df):
 
     return df
 
-def create_zone_aggregations_improved(train_df: pd.DataFrame, test_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def create_zone_aggregations_improved(train_df, test_df):
     """Create per-zone aggregated features using TRAIN-only statistics with missing value handling."""
     print("Creating zone-level aggregations (improved)...")
 
@@ -147,7 +147,7 @@ def create_zone_aggregations_improved(train_df: pd.DataFrame, test_df: pd.DataFr
 
     zone_df = zone_df.reset_index()
 
-    # IMPROVED: Handle missing values in aggregations
+    # Handle missing values in aggregations
     # Fill missing values with global statistics
     for col in zone_df.columns:
         if col != 'square_id' and zone_df[col].isnull().any():
@@ -159,7 +159,7 @@ def create_zone_aggregations_improved(train_df: pd.DataFrame, test_df: pd.DataFr
     train_df = train_df.merge(zone_df, on='square_id', how='left')
     test_df = test_df.merge(zone_df, on='square_id', how='left')
     
-    # IMPROVED: Fill missing values for test data with global statistics
+    # Fill missing values for test data with global statistics
     zone_cols = [col for col in zone_df.columns if col != 'square_id']
     for col in zone_cols:
         if col in test_df.columns and test_df[col].isnull().any():
@@ -170,7 +170,7 @@ def create_zone_aggregations_improved(train_df: pd.DataFrame, test_df: pd.DataFr
     
     return train_df, test_df
 
-def create_temporal_aggregations_improved(train_df: pd.DataFrame, test_df: pd.DataFrame, day_column='DAY') -> Tuple[pd.DataFrame, pd.DataFrame]:
+def create_temporal_aggregations_improved(train_df, test_df, day_column='DAY'):
     """Create per-day aggregated features using TRAIN-only statistics with missing value handling."""
     print("Creating day-level aggregations (improved)...")
 
@@ -198,7 +198,7 @@ def create_temporal_aggregations_improved(train_df: pd.DataFrame, test_df: pd.Da
 
     daily_df = daily_df.reset_index()
 
-    # IMPROVED: Handle missing values in aggregations
+    # Handle missing values in aggregations
     for col in daily_df.columns:
         if col != day_column and daily_df[col].isnull().any():
             global_mean = daily_df[col].mean()
@@ -209,7 +209,7 @@ def create_temporal_aggregations_improved(train_df: pd.DataFrame, test_df: pd.Da
     train_df = train_df.merge(daily_df, on=day_column, how='left')
     test_df = test_df.merge(daily_df, on=day_column, how='left')
     
-    # IMPROVED: Fill missing values for test data
+    # Fill missing values for test data
     daily_cols = [col for col in daily_df.columns if col != day_column]
     for col in daily_cols:
         if col in test_df.columns and test_df[col].isnull().any():
@@ -219,7 +219,7 @@ def create_temporal_aggregations_improved(train_df: pd.DataFrame, test_df: pd.Da
     
     return train_df, test_df
 
-def create_lag_features_improved(train_df: pd.DataFrame, test_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def create_lag_features_improved(train_df, test_df):
     """Create lag features without data leakage, with missing value handling."""
     print("Creating lag features (improved)...")
     
@@ -233,8 +233,12 @@ def create_lag_features_improved(train_df: pd.DataFrame, test_df: pd.DataFrame) 
     
     def add_lag_features(df):
         df_copy = df.copy()
+        
+        # Convert day_col to datetime for proper chronological sorting within each zone
         if day_col:
-            df_sorted = df_copy.sort_values(['square_id', day_col, hour_col])
+            df_copy['_sort_date'] = pd.to_datetime(df_copy[day_col], errors='coerce')
+            df_sorted = df_copy.sort_values(['square_id', '_sort_date', hour_col])
+            df_sorted = df_sorted.drop(columns=['_sort_date'])
         else:
             df_sorted = df_copy.sort_values(['square_id', hour_col])
         
@@ -249,7 +253,7 @@ def create_lag_features_improved(train_df: pd.DataFrame, test_df: pd.DataFrame) 
     train_df = add_lag_features(train_df)
     test_df = add_lag_features(test_df)
     
-    # IMPROVED: Handle missing values in lag features
+    # Handle missing values in lag features
     lag_cols = [col for col in train_df.columns if col.endswith('_lag1')]
     for col in lag_cols:
         if col in train_df.columns:
@@ -333,7 +337,7 @@ def create_forecasting_features(df):
     if 'download_bitrate_rx_mbits/sec' in df.columns:
         forecasting_features['download_bitrate'] = df['download_bitrate_rx_mbits/sec']
 
-    # Lag features (already computed leakage-safe)
+    # Lag features
     for col in ['avg_latency', 'upload_bitrate_mbits/sec', 'download_bitrate_rx_mbits/sec']:
         lag_col = f'{col}_lag1'
         if lag_col in df.columns:
@@ -358,26 +362,35 @@ def main():
     train_df = extract_spatial_features(train_df)
     test_df = extract_spatial_features(test_df)
 
-    # Find day column
-    day_column = 'day_id' if 'day_id' in train_df.columns else None
+    # Find actual date column
+    day_column = None
+    # Check for actual date columns first
+    for col in ['day_id', 'date_key', 'DATES', 'DATE', 'Date']:
+        if col in train_df.columns:
+            day_column = col
+            print(f"Using date column: {col}")
+            break
+    
+    # Only fall back to DAY/Day if absolutely necessary
     if not day_column:
-        for col in ['DAY', 'Day', 'DATES', 'DATE', 'Date', 'day', 'date']:
+        for col in ['DAY', 'Day', 'day', 'date']:
             if col in train_df.columns:
                 day_column = col
+                print(f"Warning: Using column '{col}' - may contain day names instead of dates")
                 break
 
-    # Create aggregations (improved)
+    # Create aggregations
     print("\n=== Creating aggregations (improved) ===")
     if day_column:
         train_df, test_df = create_temporal_aggregations_improved(train_df, test_df, day_column=day_column)
     
     train_df, test_df = create_zone_aggregations_improved(train_df, test_df)
     
-    # Create lag features (improved)
+    # Create lag features
     print("\n=== Creating lag features (improved) ===")
     train_df, test_df = create_lag_features_improved(train_df, test_df)
 
-    # IMPROVED: Final missing value check and handling
+    # Final missing value check and handling
     print("\n=== Final missing value handling ===")
     for df_name, df in [("train", train_df), ("test", test_df)]:
         missing_count = df.isnull().sum().sum()
@@ -399,18 +412,31 @@ def main():
         else:
             print(f"{df_name} data has no missing values")
 
-    # Sort data by day_id to maintain chronological order
-    print("\n=== Sorting data by day_id ===")
+    print("\n=== Sorting data chronologically (day-by-day) ===")
     if day_column and day_column in train_df.columns:
-        hour_col = 'HOUR' if 'HOUR' in train_df.columns else 'hour' if 'hour' in train_df.columns else None
-        if hour_col:
-            train_df = train_df.sort_values([day_column, hour_col, 'square_id']).reset_index(drop=True)
-            test_df = test_df.sort_values([day_column, hour_col, 'square_id']).reset_index(drop=True)
-            print(f"Sorted train and test data by {day_column}, {hour_col}, and square_id")
-        else:
-            train_df = train_df.sort_values([day_column, 'square_id']).reset_index(drop=True)
-            test_df = test_df.sort_values([day_column, 'square_id']).reset_index(drop=True)
-            print(f"Sorted train and test data by {day_column} and square_id")
+        
+        def sort_chronologically(df, day_col):
+            """Sort dataframe day-by-day in chronological order."""
+            unique_days = sorted(df[day_col].dropna().unique(), 
+                                key=lambda x: pd.to_datetime(x, errors='coerce'))
+            daily_parts = []
+            for day in unique_days:
+                day_data = df[df[day_col] == day].copy()
+                daily_parts.append(day_data)
+            return pd.concat(daily_parts, ignore_index=True) if daily_parts else df
+        
+        print(f"Sorting train data ({len(train_df)} rows) by {day_column}...")
+        train_df = sort_chronologically(train_df, day_column)
+        
+        print(f"Sorting test data ({len(test_df)} rows) by {day_column}...")
+        test_df = sort_chronologically(test_df, day_column)
+        
+        print(f"  ✓ Data sorted day-by-day in chronological order")
+        print(f"  ✓ Dates will NEVER jump backwards")
+        print(f"  Train date range: {train_df[day_column].min()} to {train_df[day_column].max()}")
+        print(f"  Test date range: {test_df[day_column].min()} to {test_df[day_column].max()}")
+        print(f"  Train unique zones: {train_df['square_id'].nunique()}")
+        print(f"  Test unique zones: {test_df['square_id'].nunique()}")
     else:
         print(f"Warning: {day_column} column not found, skipping sorting")
 
