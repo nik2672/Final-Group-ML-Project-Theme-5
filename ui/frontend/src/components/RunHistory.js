@@ -71,28 +71,33 @@ function RunHistory({ history, onClear, onCompare }) {
             </TableRow>
           </TableHead>
           <TableBody>
-            {history.map((run, index) => (
-              <TableRow key={index} hover>
-                <TableCell>{run.timestamp}</TableCell>
-                <TableCell>
-                  <Chip label={run.model.toUpperCase()} size="small" color={getModelColor(run.model)} />
-                </TableCell>
-                <TableCell>{run.target_metric || 'N/A'}</TableCell>
-                <TableCell>
-                  {formatMetric(run.metrics?.mae || run.metrics?.silhouette_score)}
-                </TableCell>
-                <TableCell>
-                  {formatMetric(run.metrics?.rmse || run.metrics?.davies_bouldin_score)}
-                </TableCell>
-                <TableCell>
-                  {formatMetric(run.metrics?.r2 || run.metrics?.n_clusters)}
-                </TableCell>
-                <TableCell>
-                  {formatMetric(run.metrics?.calinski_harabasz_score)}
-                </TableCell>
-                <TableCell align="right">{run.execution_time.toFixed(2)}</TableCell>
-              </TableRow>
-            ))}
+            {history.map((run, index) => {
+              // Support both old format (metrics) and new format (train_metrics/test_metrics)
+              const metrics = run.train_metrics || run.metrics;
+              
+              return (
+                <TableRow key={index} hover>
+                  <TableCell>{run.timestamp}</TableCell>
+                  <TableCell>
+                    <Chip label={run.model.toUpperCase()} size="small" color={getModelColor(run.model)} />
+                  </TableCell>
+                  <TableCell>{run.target_metric || 'N/A'}</TableCell>
+                  <TableCell>
+                    {formatMetric(metrics?.mae || metrics?.silhouette_score)}
+                  </TableCell>
+                  <TableCell>
+                    {formatMetric(metrics?.rmse || metrics?.davies_bouldin_score)}
+                  </TableCell>
+                  <TableCell>
+                    {formatMetric(metrics?.r2 || metrics?.n_clusters)}
+                  </TableCell>
+                  <TableCell>
+                    {formatMetric(metrics?.calinski_harabasz_score)}
+                  </TableCell>
+                  <TableCell align="right">{run.execution_time.toFixed(2)}</TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </TableContainer>

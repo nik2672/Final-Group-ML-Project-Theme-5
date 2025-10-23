@@ -50,13 +50,16 @@ def read_root():
 @app.get("/api/data-status")
 def check_data_status():
     """Check if required data files exist."""
-    clustering_path = PROJECT_ROOT / 'data' / 'features_for_clustering.csv'
+    clustering_train_path = PROJECT_ROOT / 'data' / 'features_for_clustering_train_improved.csv'
+    clustering_test_path = PROJECT_ROOT / 'data' / 'features_for_clustering_test_improved.csv'
     forecasting_path = PROJECT_ROOT / 'data' / 'features_for_forecasting.csv'
 
     return {
-        "clustering_data": clustering_path.exists(),
+        "clustering_train_data": clustering_train_path.exists(),
+        "clustering_test_data": clustering_test_path.exists(),
         "forecasting_data": forecasting_path.exists(),
-        "clustering_path": str(clustering_path),
+        "clustering_train_path": str(clustering_train_path),
+        "clustering_test_path": str(clustering_test_path),
         "forecasting_path": str(forecasting_path)
     }
 
@@ -129,24 +132,23 @@ async def run_model(request: ModelRequest):
         }
 
 
-def run_kmeans(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Run K-Means clustering model."""
-    import numpy as np
+def load_and_prepare_clustering_data():
+    """Helper function to load and prepare both train and test clustering data."""
     import pandas as pd
-    from sklearn.cluster import KMeans
     from sklearn.preprocessing import StandardScaler
-    from sklearn.metrics import silhouette_score, davies_bouldin_score
-
-    # Load data
-    data_path = PROJECT_ROOT / 'data' / 'features_for_clustering.csv'
-    if not data_path.exists():
-        raise FileNotFoundError("Clustering features not found. Run feature engineering first.")
-
-    df = pd.read_csv(data_path, low_memory=False)
-
-    # Aggregate by zone
-    if 'square_id' in df.columns:
-        zone_agg = df.groupby('square_id').agg({
+    
+    train_path = PROJECT_ROOT / 'data' / 'features_for_clustering_train_improved.csv'
+    test_path = PROJECT_ROOT / 'data' / 'features_for_clustering_test_improved.csv'
+    
+    if not train_path.exists():
+        raise FileNotFoundError("Training clustering features not found. Run feature engineering first.")
+    
+    df_train = pd.read_csv(train_path, low_memory=False)
+    df_test = pd.read_csv(test_path, low_memory=False) if test_path.exists() else None
+    
+    # Aggregate train data by zone
+    if 'square_id' in df_train.columns:
+        zone_agg = df_train.groupby('square_id').agg({
             'latitude': 'mean',
             'longitude': 'mean',
             'avg_latency': 'mean',
@@ -156,17 +158,50 @@ def run_kmeans(params: Dict[str, Any]) -> Dict[str, Any]:
             'zone_avg_upload': 'first',
             'zone_avg_download': 'first'
         }).reset_index()
-        df = zone_agg
-
+        df_train = zone_agg
+    
+    # Aggregate test data by zone
+    if df_test is not None and 'square_id' in df_test.columns:
+        zone_agg_test = df_test.groupby('square_id').agg({
+            'latitude': 'mean',
+            'longitude': 'mean',
+            'avg_latency': 'mean',
+            'std_latency': 'mean',
+            'total_throughput': 'mean',
+            'zone_avg_latency': 'first',
+            'zone_avg_upload': 'first',
+            'zone_avg_download': 'first'
+        }).reset_index()
+        df_test = zone_agg_test
+    
     features_to_use = [
         'latitude', 'longitude', 'avg_latency', 'std_latency',
         'total_throughput', 'zone_avg_latency', 'zone_avg_upload', 'zone_avg_download'
     ]
-    features_to_use = [f for f in features_to_use if f in df.columns]
-
-    X = df[features_to_use].dropna()
+    features_to_use = [f for f in features_to_use if f in df_train.columns]
+    
+    X_train = df_train[features_to_use].dropna()
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    X_train_scaled = scaler.fit_transform(X_train)
+    
+    X_test = None
+    X_test_scaled = None
+    if df_test is not None:
+        X_test = df_test[features_to_use].dropna()
+        X_test_scaled = scaler.transform(X_test)
+    
+    return X_train, X_train_scaled, X_test, X_test_scaled, scaler
+
+
+def run_kmeans(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Run K-Means clustering model on both train and test data."""
+    import numpy as np
+    import pandas as pd
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+
+    # Load and prepare data
+    X_train, X_train_scaled, X_test, X_test_scaled, scaler = load_and_prepare_clustering_data()
 
     # Run K-Means with Elbow Method (automatic k selection)
     max_k = int(params.get('max_k', 8))
@@ -179,8 +214,8 @@ def run_kmeans(params: Dict[str, Any]) -> Dict[str, Any]:
     
     for k in K_range:
         kmeans_temp = KMeans(n_clusters=k, max_iter=max_iter, random_state=random_state, n_init=10)
-        labels_temp = kmeans_temp.fit_predict(X_scaled)
-        sil_score_temp = silhouette_score(X_scaled, labels_temp)
+        labels_temp = kmeans_temp.fit_predict(X_train_scaled)
+        sil_score_temp = silhouette_score(X_train_scaled, labels_temp)
         silhouette_scores.append(sil_score_temp)
     
     # Find optimal k
@@ -193,198 +228,226 @@ def run_kmeans(params: Dict[str, Any]) -> Dict[str, Any]:
         random_state=random_state,
         n_init=10
     )
-    labels = kmeans.fit_predict(X_scaled)
+    labels_train = kmeans.fit_predict(X_train_scaled)
 
-    # Calculate metrics
-    sil_score = silhouette_score(X_scaled, labels)
-    db_score = davies_bouldin_score(X_scaled, labels)
+    # Calculate train metrics
+    sil_score_train = silhouette_score(X_train_scaled, labels_train)
+    db_score_train = davies_bouldin_score(X_train_scaled, labels_train)
+    ch_score_train = calinski_harabasz_score(X_train_scaled, labels_train)
     
-    # Add Calinski-Harabasz score for comprehensive evaluation
-    from sklearn.metrics import calinski_harabasz_score
-    ch_score = calinski_harabasz_score(X_scaled, labels)
+    # Evaluate on test data if available
+    test_metrics = None
+    labels_test = None
+    if X_test is not None:
+        labels_test = kmeans.predict(X_test_scaled)
+        
+        # Only calculate metrics if we have enough clusters
+        unique_labels_test = len(np.unique(labels_test))
+        if unique_labels_test > 1:
+            sil_score_test = silhouette_score(X_test_scaled, labels_test)
+            db_score_test = davies_bouldin_score(X_test_scaled, labels_test)
+            ch_score_test = calinski_harabasz_score(X_test_scaled, labels_test)
+            
+            test_metrics = {
+                "silhouette_score": float(sil_score_test),
+                "davies_bouldin_score": float(db_score_test),
+                "calinski_harabasz_score": float(ch_score_test)
+            }
 
     # Save results to files
     results_dir = PROJECT_ROOT / 'results' / 'clustering'
     results_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save CSV with cluster assignments
-    result_df = X.copy()
-    result_df['cluster'] = labels
-    csv_path = results_dir / 'kmeans_clusters.csv'
-    result_df.to_csv(csv_path, index=False)
+    # Save CSV with cluster assignments (train)
+    result_df_train = X_train.copy()
+    result_df_train['cluster'] = labels_train
+    csv_path_train = results_dir / 'kmeans_clusters_train.csv'
+    result_df_train.to_csv(csv_path_train, index=False)
     
-    # Generate and save visualization
+    # Save test CSV if available
+    if labels_test is not None:
+        result_df_test = X_test.copy()
+        result_df_test['cluster'] = labels_test
+        csv_path_test = results_dir / 'kmeans_clusters_test.csv'
+        result_df_test.to_csv(csv_path_test, index=False)
+    
+    # Generate and save visualization (train)
     import matplotlib.pyplot as plt
     plt.figure(figsize=(10, 8))
-    scatter = plt.scatter(X.iloc[:, 0], X.iloc[:, 1], c=labels, cmap='viridis', alpha=0.6)
+    scatter = plt.scatter(X_train.iloc[:, 0], X_train.iloc[:, 1], c=labels_train, cmap='viridis', alpha=0.6)
     plt.colorbar(scatter)
-    plt.title(f'K-Means Clustering (n_clusters={optimal_k})')
-    plt.xlabel(X.columns[0])
-    plt.ylabel(X.columns[1])
-    png_path = results_dir / 'kmeans_clusters.png'
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
+    plt.title(f'K-Means Clustering - Train (n_clusters={optimal_k})')
+    plt.xlabel(X_train.columns[0])
+    plt.ylabel(X_train.columns[1])
+    png_path_train = results_dir / 'kmeans_clusters_train.png'
+    plt.savefig(png_path_train, dpi=300, bbox_inches='tight')
     plt.close()
+    
+    # Generate test visualization if available
+    if labels_test is not None:
+        plt.figure(figsize=(10, 8))
+        scatter = plt.scatter(X_test.iloc[:, 0], X_test.iloc[:, 1], c=labels_test, cmap='viridis', alpha=0.6)
+        plt.colorbar(scatter)
+        plt.title(f'K-Means Clustering - Test (n_clusters={optimal_k})')
+        plt.xlabel(X_test.columns[0])
+        plt.ylabel(X_test.columns[1])
+        png_path_test = results_dir / 'kmeans_clusters_test.png'
+        plt.savefig(png_path_test, dpi=300, bbox_inches='tight')
+        plt.close()
 
     # Check which output files actually exist
     output_files = []
-    for filename in ["kmeans_clusters.csv", "kmeans_clusters.png"]:
+    for filename in ["kmeans_clusters_train.csv", "kmeans_clusters_train.png", 
+                     "kmeans_clusters_test.csv", "kmeans_clusters_test.png"]:
         if (results_dir / filename).exists():
             output_files.append(filename)
 
-    return {
+    result = {
         "model": "kmeans",
-        "metrics": {
-            "silhouette_score": float(sil_score),
-            "davies_bouldin_score": float(db_score),
-            "calinski_harabasz_score": float(ch_score),
+        "train_metrics": {
+            "silhouette_score": float(sil_score_train),
+            "davies_bouldin_score": float(db_score_train),
+            "calinski_harabasz_score": float(ch_score_train),
             "n_clusters": int(optimal_k),
             "inertia": float(kmeans.inertia_)
         },
         "output_files": output_files
     }
+    
+    if test_metrics is not None:
+        result["test_metrics"] = test_metrics
+    
+    return result
 
 
 def run_dbscan(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Run DBSCAN clustering model."""
+    """Run DBSCAN clustering model on both train and test data."""
     import numpy as np
     import pandas as pd
     from sklearn.cluster import DBSCAN
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.metrics import silhouette_score
+    from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+    import matplotlib.pyplot as plt
 
-    # Load data
-    data_path = PROJECT_ROOT / 'data' / 'features_for_clustering.csv'
-    if not data_path.exists():
-        raise FileNotFoundError("Clustering features not found. Run feature engineering first.")
-
-    df = pd.read_csv(data_path, low_memory=False)
-
-    # Aggregate by zone
-    if 'square_id' in df.columns:
-        zone_agg = df.groupby('square_id').agg({
-            'latitude': 'mean',
-            'longitude': 'mean',
-            'avg_latency': 'mean',
-            'std_latency': 'mean',
-            'total_throughput': 'mean',
-            'zone_avg_latency': 'first',
-            'zone_avg_upload': 'first',
-            'zone_avg_download': 'first'
-        }).reset_index()
-        df = zone_agg
-
-    features_to_use = [
-        'latitude', 'longitude', 'avg_latency', 'std_latency',
-        'total_throughput', 'zone_avg_latency', 'zone_avg_upload', 'zone_avg_download'
-    ]
-    features_to_use = [f for f in features_to_use if f in df.columns]
-
-    X = df[features_to_use].dropna()
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # Load and prepare data
+    X_train, X_train_scaled, X_test, X_test_scaled, scaler = load_and_prepare_clustering_data()
 
     # Run DBSCAN
     eps = float(params.get('eps', 1.5))
     min_samples = int(params.get('min_samples', 5))
 
     dbscan = DBSCAN(eps=eps, min_samples=min_samples, n_jobs=-1)
-    labels = dbscan.fit_predict(X_scaled)
+    labels_train = dbscan.fit_predict(X_train_scaled)
 
-    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    n_outliers = list(labels).count(-1)
+    n_clusters_train = len(set(labels_train)) - (1 if -1 in labels_train else 0)
+    n_outliers_train = list(labels_train).count(-1)
 
-    # Calculate silhouette score and Davies-Bouldin score (excluding outliers)
-    mask = labels != -1
-    sil_score = None
-    db_score = None
-    if mask.sum() > 0 and n_clusters > 1:
-        sil_score = float(silhouette_score(X_scaled[mask], labels[mask]))
-        # Import davies_bouldin_score
-        from sklearn.metrics import davies_bouldin_score, calinski_harabasz_score
-        db_score = float(davies_bouldin_score(X_scaled[mask], labels[mask]))
-        ch_score = float(calinski_harabasz_score(X_scaled[mask], labels[mask]))
-    else:
-        ch_score = 0.0
+    # Calculate train metrics (excluding outliers)
+    mask_train = labels_train != -1
+    sil_score_train = None
+    db_score_train = None
+    ch_score_train = None
+    if mask_train.sum() > 0 and n_clusters_train > 1:
+        sil_score_train = float(silhouette_score(X_train_scaled[mask_train], labels_train[mask_train]))
+        db_score_train = float(davies_bouldin_score(X_train_scaled[mask_train], labels_train[mask_train]))
+        ch_score_train = float(calinski_harabasz_score(X_train_scaled[mask_train], labels_train[mask_train]))
+
+    # Evaluate on test data if available
+    test_metrics = None
+    labels_test = None
+    if X_test is not None:
+        labels_test = dbscan.fit_predict(X_test_scaled)
+        n_clusters_test = len(set(labels_test)) - (1 if -1 in labels_test else 0)
+        n_outliers_test = list(labels_test).count(-1)
+        
+        mask_test = labels_test != -1
+        if mask_test.sum() > 0 and n_clusters_test > 1:
+            sil_score_test = float(silhouette_score(X_test_scaled[mask_test], labels_test[mask_test]))
+            db_score_test = float(davies_bouldin_score(X_test_scaled[mask_test], labels_test[mask_test]))
+            ch_score_test = float(calinski_harabasz_score(X_test_scaled[mask_test], labels_test[mask_test]))
+            
+            test_metrics = {
+                "silhouette_score": sil_score_test,
+                "davies_bouldin_score": db_score_test,
+                "calinski_harabasz_score": ch_score_test,
+                "n_clusters": int(n_clusters_test),
+                "n_outliers": int(n_outliers_test)
+            }
 
     # Save results to files
     results_dir = PROJECT_ROOT / 'results' / 'clustering'
     results_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save CSV with cluster assignments
-    result_df = X.copy()
-    result_df['cluster'] = labels
-    csv_path = results_dir / 'dbscan_clusters.csv'
-    result_df.to_csv(csv_path, index=False)
+    # Save train CSV with cluster assignments
+    result_df_train = X_train.copy()
+    result_df_train['cluster'] = labels_train
+    csv_path_train = results_dir / 'dbscan_clusters_train.csv'
+    result_df_train.to_csv(csv_path_train, index=False)
     
-    # Generate and save visualization
-    import matplotlib.pyplot as plt
+    # Save test CSV if available
+    if labels_test is not None:
+        result_df_test = X_test.copy()
+        result_df_test['cluster'] = labels_test
+        csv_path_test = results_dir / 'dbscan_clusters_test.csv'
+        result_df_test.to_csv(csv_path_test, index=False)
+    
+    # Generate train visualization
     plt.figure(figsize=(10, 8))
-    scatter = plt.scatter(X.iloc[:, 0], X.iloc[:, 1], c=labels, cmap='viridis', alpha=0.6)
+    scatter = plt.scatter(X_train.iloc[:, 0], X_train.iloc[:, 1], c=labels_train, cmap='viridis', alpha=0.6)
     plt.colorbar(scatter)
-    plt.title(f'DBSCAN Clustering (eps={eps}, min_samples={min_samples})')
-    plt.xlabel(X.columns[0])
-    plt.ylabel(X.columns[1])
-    png_path = results_dir / 'dbscan_clusters.png'
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
+    plt.title(f'DBSCAN Clustering - Train (eps={eps}, min_samples={min_samples})')
+    plt.xlabel(X_train.columns[0])
+    plt.ylabel(X_train.columns[1])
+    png_path_train = results_dir / 'dbscan_clusters_train.png'
+    plt.savefig(png_path_train, dpi=300, bbox_inches='tight')
     plt.close()
+    
+    # Generate test visualization if available
+    if labels_test is not None:
+        plt.figure(figsize=(10, 8))
+        scatter = plt.scatter(X_test.iloc[:, 0], X_test.iloc[:, 1], c=labels_test, cmap='viridis', alpha=0.6)
+        plt.colorbar(scatter)
+        plt.title(f'DBSCAN Clustering - Test (eps={eps}, min_samples={min_samples})')
+        plt.xlabel(X_test.columns[0])
+        plt.ylabel(X_test.columns[1])
+        png_path_test = results_dir / 'dbscan_clusters_test.png'
+        plt.savefig(png_path_test, dpi=300, bbox_inches='tight')
+        plt.close()
 
     # Check which output files actually exist
     output_files = []
-    for filename in ["dbscan_clusters.csv", "dbscan_clusters.png"]:
+    for filename in ["dbscan_clusters_train.csv", "dbscan_clusters_train.png",
+                     "dbscan_clusters_test.csv", "dbscan_clusters_test.png"]:
         if (results_dir / filename).exists():
             output_files.append(filename)
 
-    return {
+    result = {
         "model": "dbscan",
-        "metrics": {
-            "silhouette_score": sil_score if sil_score else 0.0,
-            "davies_bouldin_score": db_score if db_score else 0.0,
-            "calinski_harabasz_score": ch_score if ch_score else 0.0,
-            "n_clusters": int(n_clusters),
-            "n_outliers": int(n_outliers)
+        "train_metrics": {
+            "silhouette_score": sil_score_train if sil_score_train else 0.0,
+            "davies_bouldin_score": db_score_train if db_score_train else 0.0,
+            "calinski_harabasz_score": ch_score_train if ch_score_train else 0.0,
+            "n_clusters": int(n_clusters_train),
+            "n_outliers": int(n_outliers_train)
         },
         "output_files": output_files
     }
+    
+    if test_metrics is not None:
+        result["test_metrics"] = test_metrics
+    
+    return result
 
 
 def run_birch(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Run Birch clustering model."""
+    """Run Birch clustering model on both train and test data."""
     import numpy as np
     import pandas as pd
     from sklearn.cluster import Birch
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.metrics import silhouette_score, davies_bouldin_score
+    from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score, silhouette_samples
+    import matplotlib.pyplot as plt
 
-    # Load data
-    data_path = PROJECT_ROOT / 'data' / 'features_for_clustering.csv'
-    if not data_path.exists():
-        raise FileNotFoundError("Clustering features not found. Run feature engineering first.")
-
-    df = pd.read_csv(data_path, low_memory=False)
-
-    # Aggregate by zone
-    if 'square_id' in df.columns:
-        zone_agg = df.groupby('square_id').agg({
-            'latitude': 'mean',
-            'longitude': 'mean',
-            'avg_latency': 'mean',
-            'std_latency': 'mean',
-            'total_throughput': 'mean',
-            'zone_avg_latency': 'first',
-            'zone_avg_upload': 'first',
-            'zone_avg_download': 'first'
-        }).reset_index()
-        df = zone_agg
-
-    features_to_use = [
-        'latitude', 'longitude', 'avg_latency', 'std_latency',
-        'total_throughput', 'zone_avg_latency', 'zone_avg_upload', 'zone_avg_download'
-    ]
-    features_to_use = [f for f in features_to_use if f in df.columns]
-
-    X = df[features_to_use].dropna()
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # Load and prepare data
+    X_train, X_train_scaled, X_test, X_test_scaled, scaler = load_and_prepare_clustering_data()
 
     # Run Birch with automatic cluster detection
     max_clusters = int(params.get('max_clusters', 7))
@@ -403,11 +466,11 @@ def run_birch(params: Dict[str, Any]) -> Dict[str, Any]:
             threshold=threshold,
             branching_factor=branching_factor
         )
-        labels_temp = birch.fit_predict(X_scaled)
+        labels_temp = birch.fit_predict(X_train_scaled)
         
         # Only calculate silhouette if we have multiple clusters
         if len(np.unique(labels_temp)) > 1:
-            score = silhouette_score(X_scaled, labels_temp)
+            score = silhouette_score(X_train_scaled, labels_temp)
             if score > best_score:
                 best_score = score
                 best_clusters = n_clusters
@@ -417,198 +480,264 @@ def run_birch(params: Dict[str, Any]) -> Dict[str, Any]:
     # Use the best configuration
     if best_birch is None:
         # Fallback to default if optimization fails
-        birch = Birch(
+        best_birch = Birch(
             n_clusters=2,
             threshold=threshold,
             branching_factor=branching_factor
         )
-        labels = birch.fit_predict(X_scaled)
+        labels_train = best_birch.fit_predict(X_train_scaled)
         optimal_clusters = 2
     else:
-        labels = best_labels
+        labels_train = best_labels
         optimal_clusters = best_clusters
 
-    # Calculate metrics
-    sil_score = silhouette_score(X_scaled, labels)
-    db_score = davies_bouldin_score(X_scaled, labels)
-
-    # Add Calinski-Harabasz score for comprehensive evaluation
-    from sklearn.metrics import calinski_harabasz_score
-    ch_score = calinski_harabasz_score(X_scaled, labels)
+    # Calculate train metrics
+    sil_score_train = silhouette_score(X_train_scaled, labels_train)
+    db_score_train = davies_bouldin_score(X_train_scaled, labels_train)
+    ch_score_train = calinski_harabasz_score(X_train_scaled, labels_train)
     
     # Detect outliers using silhouette-based method
-    import numpy as np
-    from sklearn.metrics import silhouette_samples
-    sample_silhouette_values = silhouette_samples(X_scaled, labels)
-    
-    # Consider points with very low silhouette scores as outliers
-    outlier_threshold = -0.1  # Points with silhouette score < -0.1 are potential outliers
-    n_outliers = (sample_silhouette_values < outlier_threshold).sum()
+    sample_silhouette_values_train = silhouette_samples(X_train_scaled, labels_train)
+    outlier_threshold = -0.1
+    n_outliers_train = (sample_silhouette_values_train < outlier_threshold).sum()
+
+    # Evaluate on test data if available
+    test_metrics = None
+    labels_test = None
+    if X_test is not None:
+        labels_test = best_birch.predict(X_test_scaled)
+        
+        if len(np.unique(labels_test)) > 1:
+            sil_score_test = silhouette_score(X_test_scaled, labels_test)
+            db_score_test = davies_bouldin_score(X_test_scaled, labels_test)
+            ch_score_test = calinski_harabasz_score(X_test_scaled, labels_test)
+            
+            sample_silhouette_values_test = silhouette_samples(X_test_scaled, labels_test)
+            n_outliers_test = (sample_silhouette_values_test < outlier_threshold).sum()
+            
+            test_metrics = {
+                "silhouette_score": float(sil_score_test),
+                "davies_bouldin_score": float(db_score_test),
+                "calinski_harabasz_score": float(ch_score_test),
+                "n_clusters": int(len(np.unique(labels_test))),
+                "n_outliers": int(n_outliers_test)
+            }
 
     # Save results to files
     results_dir = PROJECT_ROOT / 'results' / 'clustering'
     results_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save CSV with cluster assignments and silhouette scores
-    result_df = X.copy()
-    result_df['cluster'] = labels
-    result_df['silhouette_score'] = sample_silhouette_values
-    result_df['is_outlier'] = sample_silhouette_values < outlier_threshold
-    csv_path = results_dir / 'birch_clusters.csv'
-    result_df.to_csv(csv_path, index=False)
+    # Save train CSV with cluster assignments
+    result_df_train = X_train.copy()
+    result_df_train['cluster'] = labels_train
+    result_df_train['silhouette_score'] = sample_silhouette_values_train
+    result_df_train['is_outlier'] = sample_silhouette_values_train < outlier_threshold
+    csv_path_train = results_dir / 'birch_clusters_train.csv'
+    result_df_train.to_csv(csv_path_train, index=False)
     
-    # Generate and save visualization
-    import matplotlib.pyplot as plt
+    # Save test CSV if available
+    if labels_test is not None:
+        result_df_test = X_test.copy()
+        result_df_test['cluster'] = labels_test
+        sample_silhouette_values_test = silhouette_samples(X_test_scaled, labels_test)
+        result_df_test['silhouette_score'] = sample_silhouette_values_test
+        result_df_test['is_outlier'] = sample_silhouette_values_test < outlier_threshold
+        csv_path_test = results_dir / 'birch_clusters_test.csv'
+        result_df_test.to_csv(csv_path_test, index=False)
+    
+    # Generate train visualization
     plt.figure(figsize=(10, 8))
-    
-    # Color by cluster, but highlight outliers
-    colors = labels.copy().astype(float)
-    colors[sample_silhouette_values < outlier_threshold] = -1  # Mark outliers
-    
-    scatter = plt.scatter(X.iloc[:, 0], X.iloc[:, 1], c=colors, cmap='viridis', alpha=0.6)
+    colors_train = labels_train.copy().astype(float)
+    colors_train[sample_silhouette_values_train < outlier_threshold] = -1
+    scatter = plt.scatter(X_train.iloc[:, 0], X_train.iloc[:, 1], c=colors_train, cmap='viridis', alpha=0.6)
     plt.colorbar(scatter)
-    plt.title(f'Birch Clustering (n_clusters={optimal_clusters}, threshold={threshold})\nOutliers in dark')
-    plt.xlabel(X.columns[0])
-    plt.ylabel(X.columns[1])
-    png_path = results_dir / 'birch_clusters.png'
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
+    plt.title(f'Birch Clustering - Train (n_clusters={optimal_clusters}, threshold={threshold})')
+    plt.xlabel(X_train.columns[0])
+    plt.ylabel(X_train.columns[1])
+    png_path_train = results_dir / 'birch_clusters_train.png'
+    plt.savefig(png_path_train, dpi=300, bbox_inches='tight')
     plt.close()
+    
+    # Generate test visualization if available
+    if labels_test is not None:
+        plt.figure(figsize=(10, 8))
+        colors_test = labels_test.copy().astype(float)
+        sample_silhouette_values_test = silhouette_samples(X_test_scaled, labels_test)
+        colors_test[sample_silhouette_values_test < outlier_threshold] = -1
+        scatter = plt.scatter(X_test.iloc[:, 0], X_test.iloc[:, 1], c=colors_test, cmap='viridis', alpha=0.6)
+        plt.colorbar(scatter)
+        plt.title(f'Birch Clustering - Test (n_clusters={optimal_clusters}, threshold={threshold})')
+        plt.xlabel(X_test.columns[0])
+        plt.ylabel(X_test.columns[1])
+        png_path_test = results_dir / 'birch_clusters_test.png'
+        plt.savefig(png_path_test, dpi=300, bbox_inches='tight')
+        plt.close()
 
     # Check which output files actually exist
     output_files = []
-    for filename in ["birch_clusters.csv", "birch_clusters.png"]:
+    for filename in ["birch_clusters_train.csv", "birch_clusters_train.png",
+                     "birch_clusters_test.csv", "birch_clusters_test.png"]:
         if (results_dir / filename).exists():
             output_files.append(filename)
 
-    return {
+    result = {
         "model": "birch",
-        "metrics": {
-            "silhouette_score": float(sil_score),
-            "davies_bouldin_score": float(db_score),
-            "calinski_harabasz_score": float(ch_score),
+        "train_metrics": {
+            "silhouette_score": float(sil_score_train),
+            "davies_bouldin_score": float(db_score_train),
+            "calinski_harabasz_score": float(ch_score_train),
             "n_clusters": int(optimal_clusters),
-            "n_outliers": int(n_outliers)
+            "n_outliers": int(n_outliers_train)
         },
         "output_files": output_files
     }
+    
+    if test_metrics is not None:
+        result["test_metrics"] = test_metrics
+    
+    return result
 
 
 def run_optics(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Run OPTICS clustering model."""
+    """Run OPTICS clustering model on both train and test data."""
     import numpy as np
     import pandas as pd
     from sklearn.cluster import OPTICS
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.metrics import silhouette_score
+    from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+    import matplotlib.pyplot as plt
 
-    # Load data
-    data_path = PROJECT_ROOT / 'data' / 'features_for_clustering.csv'
-    if not data_path.exists():
-        raise FileNotFoundError("Clustering features not found. Run feature engineering first.")
-
-    df = pd.read_csv(data_path, low_memory=False)
-
-    # Aggregate by zone
-    if 'square_id' in df.columns:
-        zone_agg = df.groupby('square_id').agg({
-            'latitude': 'mean',
-            'longitude': 'mean',
-            'avg_latency': 'mean',
-            'std_latency': 'mean',
-            'total_throughput': 'mean',
-            'zone_avg_latency': 'first',
-            'zone_avg_upload': 'first',
-            'zone_avg_download': 'first'
-        }).reset_index()
-        df = zone_agg
-
-    features_to_use = [
-        'latitude', 'longitude', 'avg_latency', 'std_latency',
-        'total_throughput', 'zone_avg_latency', 'zone_avg_upload', 'zone_avg_download'
-    ]
-    features_to_use = [f for f in features_to_use if f in df.columns]
-
-    X = df[features_to_use].dropna()
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # Load and prepare data
+    X_train, X_train_scaled, X_test, X_test_scaled, scaler = load_and_prepare_clustering_data()
 
     # Run OPTICS
     min_samples = int(params.get('min_samples', 5))
     max_eps = float(params.get('max_eps', 2.0))
     xi = float(params.get('xi', 0.1))
+    cluster_method = params.get('cluster_method', 'xi')
 
     optics = OPTICS(
         min_samples=min_samples,
         max_eps=max_eps,
-        cluster_method='xi',
-        xi=xi,
+        cluster_method=cluster_method,
+        xi=xi if cluster_method == 'xi' else 0.05,
         n_jobs=-1
     )
-    labels = optics.fit_predict(X_scaled)
+    labels_train = optics.fit_predict(X_train_scaled)
 
-    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    n_outliers = list(labels).count(-1)
+    n_clusters_train = len(set(labels_train)) - (1 if -1 in labels_train else 0)
+    n_outliers_train = list(labels_train).count(-1)
 
-    # Calculate silhouette score and Davies-Bouldin score (excluding outliers)
-    mask = labels != -1
-    sil_score = None
-    db_score = None
-    if mask.sum() > 0 and n_clusters > 1:
-        sil_score = float(silhouette_score(X_scaled[mask], labels[mask]))
-        # Import davies_bouldin_score
-        from sklearn.metrics import davies_bouldin_score, calinski_harabasz_score
-        db_score = float(davies_bouldin_score(X_scaled[mask], labels[mask]))
-        ch_score = float(calinski_harabasz_score(X_scaled[mask], labels[mask]))
-    else:
-        ch_score = 0.0
+    # Calculate train metrics (excluding outliers)
+    mask_train = labels_train != -1
+    sil_score_train = None
+    db_score_train = None
+    ch_score_train = None
+    if mask_train.sum() > 0 and n_clusters_train > 1:
+        sil_score_train = float(silhouette_score(X_train_scaled[mask_train], labels_train[mask_train]))
+        db_score_train = float(davies_bouldin_score(X_train_scaled[mask_train], labels_train[mask_train]))
+        ch_score_train = float(calinski_harabasz_score(X_train_scaled[mask_train], labels_train[mask_train]))
+
+    # Evaluate on test data if available
+    test_metrics = None
+    labels_test = None
+    if X_test is not None:
+        # For OPTICS, we need to refit on test data since it doesn't have a predict method
+        optics_test = OPTICS(
+            min_samples=min_samples,
+            max_eps=max_eps,
+            cluster_method=cluster_method,
+            xi=xi if cluster_method == 'xi' else 0.05,
+            n_jobs=-1
+        )
+        labels_test = optics_test.fit_predict(X_test_scaled)
+        n_clusters_test = len(set(labels_test)) - (1 if -1 in labels_test else 0)
+        n_outliers_test = list(labels_test).count(-1)
+        
+        mask_test = labels_test != -1
+        if mask_test.sum() > 0 and n_clusters_test > 1:
+            sil_score_test = float(silhouette_score(X_test_scaled[mask_test], labels_test[mask_test]))
+            db_score_test = float(davies_bouldin_score(X_test_scaled[mask_test], labels_test[mask_test]))
+            ch_score_test = float(calinski_harabasz_score(X_test_scaled[mask_test], labels_test[mask_test]))
+            
+            test_metrics = {
+                "silhouette_score": sil_score_test,
+                "davies_bouldin_score": db_score_test,
+                "calinski_harabasz_score": ch_score_test,
+                "n_clusters": int(n_clusters_test),
+                "n_outliers": int(n_outliers_test)
+            }
 
     # Save results to files
     results_dir = PROJECT_ROOT / 'results' / 'clustering'
     results_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save CSV with cluster assignments
-    result_df = X.copy()
-    result_df['cluster'] = labels
-    csv_path = results_dir / 'optics_clusters.csv'
-    result_df.to_csv(csv_path, index=False)
+    # Save train CSV
+    result_df_train = X_train.copy()
+    result_df_train['cluster'] = labels_train
+    csv_path_train = results_dir / 'optics_clusters_train.csv'
+    result_df_train.to_csv(csv_path_train, index=False)
     
-    # Generate and save visualization
-    import matplotlib.pyplot as plt
+    # Save test CSV if available
+    if labels_test is not None:
+        result_df_test = X_test.copy()
+        result_df_test['cluster'] = labels_test
+        csv_path_test = results_dir / 'optics_clusters_test.csv'
+        result_df_test.to_csv(csv_path_test, index=False)
+    
+    # Generate train visualization
     plt.figure(figsize=(10, 8))
-    scatter = plt.scatter(X.iloc[:, 0], X.iloc[:, 1], c=labels, cmap='viridis', alpha=0.6)
+    scatter = plt.scatter(X_train.iloc[:, 0], X_train.iloc[:, 1], c=labels_train, cmap='viridis', alpha=0.6)
     plt.colorbar(scatter)
-    plt.title(f'OPTICS Clustering (min_samples={min_samples}, max_eps={max_eps})')
-    plt.xlabel(X.columns[0])
-    plt.ylabel(X.columns[1])
-    png_path = results_dir / 'optics_clusters.png'
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
+    plt.title(f'OPTICS Clustering - Train (min_samples={min_samples}, max_eps={max_eps})')
+    plt.xlabel(X_train.columns[0])
+    plt.ylabel(X_train.columns[1])
+    png_path_train = results_dir / 'optics_clusters_train.png'
+    plt.savefig(png_path_train, dpi=300, bbox_inches='tight')
     plt.close()
+    
+    # Generate test visualization if available
+    if labels_test is not None:
+        plt.figure(figsize=(10, 8))
+        scatter = plt.scatter(X_test.iloc[:, 0], X_test.iloc[:, 1], c=labels_test, cmap='viridis', alpha=0.6)
+        plt.colorbar(scatter)
+        plt.title(f'OPTICS Clustering - Test (min_samples={min_samples}, max_eps={max_eps})')
+        plt.xlabel(X_test.columns[0])
+        plt.ylabel(X_test.columns[1])
+        png_path_test = results_dir / 'optics_clusters_test.png'
+        plt.savefig(png_path_test, dpi=300, bbox_inches='tight')
+        plt.close()
 
     # Check which output files actually exist
     output_files = []
-    for filename in ["optics_clusters.csv", "optics_clusters.png"]:
+    for filename in ["optics_clusters_train.csv", "optics_clusters_train.png",
+                     "optics_clusters_test.csv", "optics_clusters_test.png"]:
         if (results_dir / filename).exists():
             output_files.append(filename)
 
-    return {
+    result = {
         "model": "optics",
-        "metrics": {
-            "silhouette_score": sil_score if sil_score else 0.0,
-            "davies_bouldin_score": db_score if db_score else 0.0,
-            "calinski_harabasz_score": ch_score if ch_score else 0.0,
-            "n_clusters": int(n_clusters),
-            "n_outliers": int(n_outliers)
+        "train_metrics": {
+            "silhouette_score": sil_score_train if sil_score_train else 0.0,
+            "davies_bouldin_score": db_score_train if db_score_train else 0.0,
+            "calinski_harabasz_score": ch_score_train if ch_score_train else 0.0,
+            "n_clusters": int(n_clusters_train),
+            "n_outliers": int(n_outliers_train)
         },
         "output_files": output_files
     }
+    
+    if test_metrics is not None:
+        result["test_metrics"] = test_metrics
+    
+    return result
 
 
 def run_hdbscan(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Run HDBSCAN clustering model."""
+    """Run HDBSCAN clustering model on both train and test data."""
     import numpy as np
     import pandas as pd
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.metrics import silhouette_score
+    from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+    import matplotlib.pyplot as plt
 
     try:
         import hdbscan
@@ -618,36 +747,8 @@ def run_hdbscan(params: Dict[str, Any]) -> Dict[str, Any]:
         from sklearn.cluster import DBSCAN
         use_real_hdbscan = False
 
-    # Load data
-    data_path = PROJECT_ROOT / 'data' / 'features_for_clustering.csv'
-    if not data_path.exists():
-        raise FileNotFoundError("Clustering features not found. Run feature engineering first.")
-
-    df = pd.read_csv(data_path, low_memory=False)
-
-    # Aggregate by zone
-    if 'square_id' in df.columns:
-        zone_agg = df.groupby('square_id').agg({
-            'latitude': 'mean',
-            'longitude': 'mean',
-            'avg_latency': 'mean',
-            'std_latency': 'mean',
-            'total_throughput': 'mean',
-            'zone_avg_latency': 'first',
-            'zone_avg_upload': 'first',
-            'zone_avg_download': 'first'
-        }).reset_index()
-        df = zone_agg
-
-    features_to_use = [
-        'latitude', 'longitude', 'avg_latency', 'std_latency',
-        'total_throughput', 'zone_avg_latency', 'zone_avg_upload', 'zone_avg_download'
-    ]
-    features_to_use = [f for f in features_to_use if f in df.columns]
-
-    X = df[features_to_use].dropna()
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # Load and prepare data
+    X_train, X_train_scaled, X_test, X_test_scaled, scaler = load_and_prepare_clustering_data()
 
     # Run HDBSCAN or fallback
     min_cluster_size = int(params.get('min_cluster_size', 8))
@@ -664,73 +765,128 @@ def run_hdbscan(params: Dict[str, Any]) -> Dict[str, Any]:
             cluster_selection_method="eom",
             core_dist_n_jobs=-1
         )
-        labels = hdb.fit_predict(X_scaled)
+        labels_train = hdb.fit_predict(X_train_scaled)
         model_note = "HDBSCAN"
     else:
         # Fallback: Use DBSCAN with parameters derived from HDBSCAN params
-        # Convert min_cluster_size to eps approximation and use min_samples
-        eps = max(0.3, min_cluster_size * 0.1)  # Rough conversion
+        eps = max(0.3, min_cluster_size * 0.1)
         dbscan = DBSCAN(eps=eps, min_samples=min_samples or 5, n_jobs=-1)
-        labels = dbscan.fit_predict(X_scaled)
+        labels_train = dbscan.fit_predict(X_train_scaled)
         model_note = "HDBSCAN (DBSCAN Fallback)"
 
-    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    n_outliers = list(labels).count(-1)
+    n_clusters_train = len(set(labels_train)) - (1 if -1 in labels_train else 0)
+    n_outliers_train = list(labels_train).count(-1)
 
-    # Calculate silhouette score and Davies-Bouldin score (excluding outliers)
-    mask = labels != -1
-    sil_score = None
-    db_score = None
-    ch_score = None
-    if mask.sum() > 0 and n_clusters > 1:
-        sil_score = float(silhouette_score(X_scaled[mask], labels[mask]))
-        # Import davies_bouldin_score
-        from sklearn.metrics import davies_bouldin_score, calinski_harabasz_score
-        db_score = float(davies_bouldin_score(X_scaled[mask], labels[mask]))
-        ch_score = float(calinski_harabasz_score(X_scaled[mask], labels[mask]))
-    else:
-        ch_score = 0.0
+    # Calculate train metrics (excluding outliers)
+    mask_train = labels_train != -1
+    sil_score_train = None
+    db_score_train = None
+    ch_score_train = None
+    if mask_train.sum() > 0 and n_clusters_train > 1:
+        sil_score_train = float(silhouette_score(X_train_scaled[mask_train], labels_train[mask_train]))
+        db_score_train = float(davies_bouldin_score(X_train_scaled[mask_train], labels_train[mask_train]))
+        ch_score_train = float(calinski_harabasz_score(X_train_scaled[mask_train], labels_train[mask_train]))
+
+    # Evaluate on test data if available
+    test_metrics = None
+    labels_test = None
+    if X_test is not None:
+        if use_real_hdbscan:
+            # HDBSCAN needs to refit on test data
+            hdb_test = hdbscan.HDBSCAN(
+                min_cluster_size=min_cluster_size,
+                min_samples=min_samples,
+                cluster_selection_epsilon=0.0,
+                cluster_selection_method="eom",
+                core_dist_n_jobs=-1
+            )
+            labels_test = hdb_test.fit_predict(X_test_scaled)
+        else:
+            eps = max(0.3, min_cluster_size * 0.1)
+            dbscan_test = DBSCAN(eps=eps, min_samples=min_samples or 5, n_jobs=-1)
+            labels_test = dbscan_test.fit_predict(X_test_scaled)
+        
+        n_clusters_test = len(set(labels_test)) - (1 if -1 in labels_test else 0)
+        n_outliers_test = list(labels_test).count(-1)
+        
+        mask_test = labels_test != -1
+        if mask_test.sum() > 0 and n_clusters_test > 1:
+            sil_score_test = float(silhouette_score(X_test_scaled[mask_test], labels_test[mask_test]))
+            db_score_test = float(davies_bouldin_score(X_test_scaled[mask_test], labels_test[mask_test]))
+            ch_score_test = float(calinski_harabasz_score(X_test_scaled[mask_test], labels_test[mask_test]))
+            
+            test_metrics = {
+                "silhouette_score": sil_score_test,
+                "davies_bouldin_score": db_score_test,
+                "calinski_harabasz_score": ch_score_test,
+                "n_clusters": int(n_clusters_test),
+                "n_outliers": int(n_outliers_test)
+            }
 
     # Save results to files
     results_dir = PROJECT_ROOT / 'results' / 'clustering'
     results_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save CSV with cluster assignments
-    result_df = X.copy()
-    result_df['cluster'] = labels
-    csv_path = results_dir / 'hdbscan_clusters.csv'
-    result_df.to_csv(csv_path, index=False)
+    # Save train CSV
+    result_df_train = X_train.copy()
+    result_df_train['cluster'] = labels_train
+    csv_path_train = results_dir / 'hdbscan_clusters_train.csv'
+    result_df_train.to_csv(csv_path_train, index=False)
     
-    # Generate and save visualization
-    import matplotlib.pyplot as plt
+    # Save test CSV if available
+    if labels_test is not None:
+        result_df_test = X_test.copy()
+        result_df_test['cluster'] = labels_test
+        csv_path_test = results_dir / 'hdbscan_clusters_test.csv'
+        result_df_test.to_csv(csv_path_test, index=False)
+    
+    # Generate train visualization
     plt.figure(figsize=(10, 8))
-    scatter = plt.scatter(X.iloc[:, 0], X.iloc[:, 1], c=labels, cmap='viridis', alpha=0.6)
+    scatter = plt.scatter(X_train.iloc[:, 0], X_train.iloc[:, 1], c=labels_train, cmap='viridis', alpha=0.6)
     plt.colorbar(scatter)
-    plt.title(f'{model_note} (min_cluster_size={min_cluster_size})')
-    plt.xlabel(X.columns[0])
-    plt.ylabel(X.columns[1])
-    png_path = results_dir / 'hdbscan_clusters.png'
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
+    plt.title(f'{model_note} - Train (min_cluster_size={min_cluster_size})')
+    plt.xlabel(X_train.columns[0])
+    plt.ylabel(X_train.columns[1])
+    png_path_train = results_dir / 'hdbscan_clusters_train.png'
+    plt.savefig(png_path_train, dpi=300, bbox_inches='tight')
     plt.close()
+    
+    # Generate test visualization if available
+    if labels_test is not None:
+        plt.figure(figsize=(10, 8))
+        scatter = plt.scatter(X_test.iloc[:, 0], X_test.iloc[:, 1], c=labels_test, cmap='viridis', alpha=0.6)
+        plt.colorbar(scatter)
+        plt.title(f'{model_note} - Test (min_cluster_size={min_cluster_size})')
+        plt.xlabel(X_test.columns[0])
+        plt.ylabel(X_test.columns[1])
+        png_path_test = results_dir / 'hdbscan_clusters_test.png'
+        plt.savefig(png_path_test, dpi=300, bbox_inches='tight')
+        plt.close()
 
     # Check which output files actually exist
     output_files = []
-    for filename in ["hdbscan_clusters.csv", "hdbscan_clusters.png"]:
+    for filename in ["hdbscan_clusters_train.csv", "hdbscan_clusters_train.png",
+                     "hdbscan_clusters_test.csv", "hdbscan_clusters_test.png"]:
         if (results_dir / filename).exists():
             output_files.append(filename)
 
-    return {
+    result = {
         "model": "hdbscan",
-        "model_implementation": model_note,
-        "metrics": {
-            "silhouette_score": sil_score if sil_score else 0.0,
-            "davies_bouldin_score": db_score if db_score else 0.0,
-            "calinski_harabasz_score": ch_score if ch_score else 0.0,
-            "n_clusters": int(n_clusters),
-            "n_outliers": int(n_outliers)
+        "model_note": model_note,
+        "train_metrics": {
+            "silhouette_score": sil_score_train if sil_score_train else 0.0,
+            "davies_bouldin_score": db_score_train if db_score_train else 0.0,
+            "calinski_harabasz_score": ch_score_train if ch_score_train else 0.0,
+            "n_clusters": int(n_clusters_train),
+            "n_outliers": int(n_outliers_train)
         },
         "output_files": output_files
     }
+    
+    if test_metrics is not None:
+        result["test_metrics"] = test_metrics
+    
+    return result
 
 
 def run_xgboost(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dict[str, Any]:
