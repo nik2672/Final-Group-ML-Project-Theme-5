@@ -1,6 +1,27 @@
 # -*- coding: utf-8 -*-
 # auth: nik
 # lean-ish GRU that works with the new train/test CSVs
+#Shapes cheat-sheet (super helpful)
+'''
+Before windowing:
+
+X_tr: [T_train, n_features]
+
+y_tr: [T_train] (after scaling, 1D)
+
+After windowing in a batch:
+
+xb: [batch_size, lookback=32, n_features] (float32, on device)
+
+yb: [batch_size, 1] (float32, on device)
+
+GRU output:
+
+out: [batch_size, lookback, hidden=48]
+
+last = out[:, -1, :]: [batch_size, 48]
+
+head(last): [batch_size, 1]'''
 
 import os, math, warnings
 import numpy as np
@@ -34,20 +55,21 @@ use_amp = torch.cuda.is_available()
 seed = 42
 np.random.seed(seed); torch.manual_seed(seed)
 
-lookback = 32
-epochs   = 15
-hidden   = 48
-n_layers = 1
-dropout  = 0.1
-lr       = 1e-3
-batch0   = 128
+lookback = 32#how may past time step per training sample 
+epochs   = 15#passes over thr training data - 1000 samples 10 times in total trained, making 10000 trainin g steps, if too many model overfit 
+hidden   = 48# gru hiddnen unit (size ) - track 48 different featues or patterns simultaneous can learn to recognise different aspects of data, eahc 48 units can learn to recognizee differtn aspects of data  
+n_layers = 1#gru layers (stack depth )- onelayer of processing 
+dropout  = 0.1#pruen 10% of neurons 
+lr       = 1e-3#learnign rate for adam 
+batch0   = 128#processe 18- sampels at once during training instead of one at a time 
 num_workers = 0
-
+#KPI - key perfroamnce indicators in clustering measure how ell algo groups simialr data points together simialr to silhouette score (how tight and sperated the clusters are) . 
+# kpi in forecasting - ki measur eprediction accraucy using metrics like RMSE (how far predictions are off, MAE (avreage prediction eror and MAPe ( PERCENTAGE ERORR) HELP COMPARE AND HCOOSE THE BEST MODEL 
 use_only_kpis = False
-max_features  = 16
+max_features  = 16#MAX FEATUERS 
 
-# utils
-def _norm_names(df: pd.DataFrame) -> pd.DataFrame:
+# utils- FEATURE PCIKIGN, CLEARS UP MESSY NAMES ADN  
+def _norm_names(df: pd.DataFrame) -> pd.DataFrame:#LOWER CASE HEADERS aliases messy anmes ot clea one 
     m = {c: c.lower() for c in df.columns}
     df = df.rename(columns=m)
     ren = {
@@ -68,10 +90,10 @@ def _norm_names(df: pd.DataFrame) -> pd.DataFrame:
             df = df.rename(columns={k: v})
     return df
 
-def _pick_kpis(df: pd.DataFrame):
+def _pick_kpis(df: pd.DataFrame):#returns [avg_latency, upload_bitrate, dowload_bitrate]
     return [c for c in ["avg_latency","upload_bitrate","download_bitrate"] if c in df.columns]
 
-def _select_feats(df: pd.DataFrame, target: str):
+def _select_feats(df: pd.DataFrame, target: str):#takes all numeric columsn except teh target optionally resitricts to kpis + lag 1 when and caps max features 
     num = df.select_dtypes(include=[np.number]).columns.tolist()
     feats = [c for c in num if c != target]
     if use_only_kpis:
@@ -81,13 +103,13 @@ def _select_feats(df: pd.DataFrame, target: str):
         feats = feats[:max_features]
     return feats
 
-def _downcast(df: pd.DataFrame, cols):
+def _downcast(df: pd.DataFrame, cols):# coorces selected columsn to a float 32 
     for c in cols:
         df[c] = pd.to_numeric(df[c], errors="coerce").astype(np.float32)
     return df
 
 # dataset
-class WinDS(Dataset):
+class WinDS(Dataset):#stores c,y arrays plsu w = lookback, len : number of pssible windows = (len (x) - w)| _getitem_(i) returns the window X[i; i+ w] and the target at tiem i+w (ie predict next step )
     def __init__(self, X, y, w):
         self.X = X
         self.y = y.reshape(-1,1)
@@ -99,7 +121,7 @@ class WinDS(Dataset):
         xw = self.X[j-self.w:j]
         return torch.from_numpy(xw), torch.from_numpy(self.y[j])
 
-def _make_loaders_from_arrays(X_tr, y_tr, X_te, y_te):
+def _make_loaders_from_arrays(X_tr, y_tr, X_te, y_te):#uses the 15% train as validation | wraps each split in windDS to get windows of length lookback = 32 | builds DataLoaders (no shuffle -> preserves order) | whyy no shuffle to keep order to avoid leaking the futrue into teh past 
     n = len(X_tr)
     n_va = int(0.15 * n)
     X_va, y_va = X_tr[-n_va:], y_tr[-n_va:]
@@ -121,7 +143,9 @@ def _make_loaders_from_arrays(X_tr, y_tr, X_te, y_te):
     return ld_tr, ld_va, ld_te
 
 # model
-class GRUReg(nn.Module):
+#GRU: a recurrrent layer with gates tha tlearn what ot keep/forget from recent timesteps 
+#MLP head: small fully ocnnnected network tha tmaps the GRU last hidden state ot the target 
+class GRUReg(nn.Module):#gru process teh 32 x n_feature sequence and outputs a vector per time step- it takes the last tiem step (ut [:, -1, :]) -> feed into a small MLP head -> one scalar: 
     def __init__(self, n_features, hidden=hidden, n_layers=n_layers, dropout=dropout):
         super().__init__()
         self.gru = nn.GRU(
@@ -160,7 +184,7 @@ def load_split_or_fallback():
     tr, te = df.iloc[:n_tr].copy(), df.iloc[n_tr:].copy()
     return tr, te, "fallback"
 
-def build_arrays(tr_df, te_df, target):
+def build_arrays(tr_df, te_df, target):#1. select featuers with _select_feats downcast feauters + target to flaot 32 3. fits scales on train only (xsc = standard scaler(), ys = MinMaxScaler())
     feats = _select_feats(tr_df, target)
     cols = feats + [target]
     tr_df = _downcast(tr_df, cols)
@@ -174,11 +198,11 @@ def build_arrays(tr_df, te_df, target):
 
     X_te = xsc.transform(te_df[feats].values.astype(np.float32)).astype(np.float32)
     y_te = ysc.transform(te_df[target].values.reshape(-1,1).astype(np.float32)).ravel()
-
+#transform trian/test with those scalers  + return arrays and the yscaler (used later to invert predicitosn to real units, plus feature count and names )
     return X_tr, y_tr, X_te, y_te, ysc, len(feats), feats
-
-# train/eval one target
-def run_one(tr_df, te_df, target):
+#standard scaler: features -weise (x-mean) /std 
+# train/eval one target | Why best val snapshot? -> prevent saving a late pech tha toverfit; you restore the bet performing weights 
+def run_one(tr_df, te_df, target):#training loop (per target) |1. build array & loaders: build_arrays -> _make_laoders_from_arrays 2. create mdoel + adam (learnign rate), MSE LOSS.3. 15 epochs  _ train phase for eah batch window xb and label yb-> compute preds & MSE -> backward with scaler -> optimiser step 4. no grad compute val MSE accross teh val loader | keep weights 
     X_tr, y_tr, X_te, y_te, ysc, n_feats, feats = build_arrays(tr_df, te_df, target)
     ld_tr, ld_va, ld_te = _make_loaders_from_arrays(X_tr, y_tr, X_te, y_te)
 
@@ -188,7 +212,7 @@ def run_one(tr_df, te_df, target):
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     best_val = float("inf"); best = None
-
+#test evalation and plotting 
     pbar = tqdm(range(1, epochs+1), desc=f"[{target}] epochs", ncols=110)
     for _ in pbar:
         model.train()
