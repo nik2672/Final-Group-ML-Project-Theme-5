@@ -66,6 +66,7 @@ def standardize_model_label(raw_label: str) -> str:
         'lstm-lean-v2': 'LSTM',
         'xgboost': 'XGBoost',
         'arima': 'ARIMA',
+        'srnn': 'SRNN',
     }
     return replacements.get(s, s)
 
@@ -188,16 +189,17 @@ def generate_all_figures(dataframe: pd.DataFrame, output_directory: str):
 
 
 def parse_command_line_arguments():
-    parser = argparse.ArgumentParser(description='compare gru, lstm, and xgboost csv results (arima excluded)')
+    parser = argparse.ArgumentParser(description='compare gru, lstm, xgboost, and srnn csv results (arima excluded)')
     parser.add_argument('--gru', default='gruResults.csv', help='path to gru results csv')
     parser.add_argument('--lstm', default='lstmResults.csv', help='path to lstm results csv')
     parser.add_argument('--xgb_arima', default='xgbArimaResults.csv', help='path to xgboost+arima results csv')
+    parser.add_argument('--srnn', default='srnnResults.csv', help='path to srnn results csv')
     parser.add_argument('--outdir', default='plots', help='output directory for figures and summary csv')
     parser.add_argument(
         '--include',
         nargs='*',
-        default=['GRU', 'LSTM', 'XGBoost'],
-        help='models to include (default: gru lstm xgboost)',
+        default=['GRU', 'LSTM', 'XGBoost', 'SRNN'],
+        help='models to include (default: gru lstm xgboost srnn)',
     )
     return parser.parse_args()
 
@@ -205,7 +207,7 @@ def parse_command_line_arguments():
 if __name__ == '__main__':
     args = parse_command_line_arguments()
 
-    # load three sources; force labels for the per-model files; xgb/arima file keeps embedded labels
+    # load four sources; force labels for the per-model files; xgb/arima file keeps embedded labels
     dataframe_list = []
     if os.path.exists(args.gru):
         dataframe_list.append(load_results_file(args.gru, forced_model_label='GRU'))
@@ -213,6 +215,8 @@ if __name__ == '__main__':
         dataframe_list.append(load_results_file(args.lstm, forced_model_label='LSTM'))
     if os.path.exists(args.xgb_arima):
         dataframe_list.append(load_results_file(args.xgb_arima))
+    if os.path.exists(args.srnn):
+        dataframe_list.append(load_results_file(args.srnn, forced_model_label='SRNN'))
 
     if not dataframe_list:
         raise FileNotFoundError('no csv files were found next to this script')
@@ -223,7 +227,7 @@ if __name__ == '__main__':
     combined_dataframe = combined_dataframe[combined_dataframe['model'].isin(args.include)].reset_index(drop=True)
 
     # enforce stable legend order
-    preferred_model_order = ['GRU', 'LSTM', 'XGBoost']
+    preferred_model_order = ['GRU', 'LSTM', 'XGBoost', 'SRNN']
     combined_dataframe = build_categorical_order(combined_dataframe, preferred_model_order)
 
     # write summary and render figures
