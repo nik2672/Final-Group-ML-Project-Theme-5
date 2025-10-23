@@ -40,7 +40,8 @@ function DataStatusIndicator() {
 
   if (!status) return null;
 
-  const allReady = status.clustering_data && status.forecasting_data;
+  const clusteringReady = status.clustering_train_data && status.clustering_test_data;
+  const allReady = clusteringReady && status.forecasting_data;
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -48,16 +49,16 @@ function DataStatusIndicator() {
         <Alert severity="success" icon={<CheckCircleIcon />}>
           <AlertTitle>Data Files Ready</AlertTitle>
           <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
-            <Chip label="Clustering ✓" size="small" color="success" variant="outlined" />
+            <Chip label="Clustering (Train/Test) ✓" size="small" color="success" variant="outlined" />
             <Chip label="Forecasting ✓" size="small" color="success" variant="outlined" />
           </Box>
         </Alert>
       ) : (
         <Alert severity="warning" icon={<ErrorIcon />}>
           <AlertTitle>Missing Data Files</AlertTitle>
-          Please run feature engineering first: <code>python src/features/feature_engineering.py</code>
+          Please run feature engineering first: <code>python src/features/leakage_safe_feature_engineering.py</code>
           <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
-            {!status.clustering_data && <Chip label="Clustering ✗" size="small" color="error" variant="outlined" />}
+            {!clusteringReady && <Chip label="Clustering (Train/Test) ✗" size="small" color="error" variant="outlined" />}
             {!status.forecasting_data && <Chip label="Forecasting ✗" size="small" color="error" variant="outlined" />}
           </Box>
         </Alert>

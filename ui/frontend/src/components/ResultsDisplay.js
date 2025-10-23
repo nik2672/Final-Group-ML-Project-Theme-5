@@ -22,25 +22,27 @@ function ResultsDisplay({ results, model }) {
   if (!results) return null;
 
   const renderClusteringResults = () => {
-    if (!results.metrics) return null;
+    // Check if we have train_metrics (new format) or metrics (old format)
+    const trainMetrics = results.train_metrics || results.metrics;
+    const testMetrics = results.test_metrics;
+    
+    if (!trainMetrics) return null;
 
-    return (
-      <Box>
-        <Typography variant="h5" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <CheckCircleIcon color="success" />
-          Clustering Results
+    const renderMetricsGrid = (metrics, title) => (
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h6" gutterBottom color="text.secondary">
+          {title}
         </Typography>
-
-        <Grid container spacing={3} sx={{ mt: 2 }}>
-          {results.metrics.silhouette_score !== undefined && (
-            <Grid item xs={12} sm={4}>
+        <Grid container spacing={3}>
+          {metrics.silhouette_score !== undefined && (
+            <Grid item xs={12} sm={3}>
               <Card elevation={2}>
                 <CardContent>
-                  <Typography color="text.secondary" gutterBottom>
+                  <Typography color="text.secondary" gutterBottom variant="body2">
                     Silhouette Score
                   </Typography>
-                  <Typography variant="h4">
-                    {results.metrics.silhouette_score.toFixed(3)}
+                  <Typography variant="h5">
+                    {metrics.silhouette_score.toFixed(3)}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     Higher is better (0-1)
@@ -50,15 +52,15 @@ function ResultsDisplay({ results, model }) {
             </Grid>
           )}
 
-          {results.metrics.davies_bouldin_score !== undefined && (
-            <Grid item xs={12} sm={4}>
+          {metrics.davies_bouldin_score !== undefined && (
+            <Grid item xs={12} sm={3}>
               <Card elevation={2}>
                 <CardContent>
-                  <Typography color="text.secondary" gutterBottom>
-                    Davies-Bouldin Index
+                  <Typography color="text.secondary" gutterBottom variant="body2">
+                    Davies-Bouldin
                   </Typography>
-                  <Typography variant="h4">
-                    {results.metrics.davies_bouldin_score.toFixed(3)}
+                  <Typography variant="h5">
+                    {metrics.davies_bouldin_score.toFixed(3)}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     Lower is better
@@ -68,15 +70,15 @@ function ResultsDisplay({ results, model }) {
             </Grid>
           )}
 
-          {results.metrics.calinski_harabasz_score !== undefined && (
-            <Grid item xs={12} sm={4}>
+          {metrics.calinski_harabasz_score !== undefined && (
+            <Grid item xs={12} sm={3}>
               <Card elevation={2}>
                 <CardContent>
-                  <Typography color="text.secondary" gutterBottom>
-                    Calinski-Harabasz Index
+                  <Typography color="text.secondary" gutterBottom variant="body2">
+                    Calinski-Harabasz
                   </Typography>
-                  <Typography variant="h4">
-                    {results.metrics.calinski_harabasz_score.toFixed(3)}
+                  <Typography variant="h5">
+                    {metrics.calinski_harabasz_score.toFixed(3)}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     Higher is better
@@ -86,19 +88,19 @@ function ResultsDisplay({ results, model }) {
             </Grid>
           )}
 
-          {results.metrics.n_clusters !== undefined && (
-            <Grid item xs={12} sm={4}>
+          {metrics.n_clusters !== undefined && (
+            <Grid item xs={12} sm={3}>
               <Card elevation={2}>
                 <CardContent>
-                  <Typography color="text.secondary" gutterBottom>
+                  <Typography color="text.secondary" gutterBottom variant="body2">
                     Clusters Found
                   </Typography>
-                  <Typography variant="h4">
-                    {results.metrics.n_clusters}
+                  <Typography variant="h5">
+                    {metrics.n_clusters}
                   </Typography>
-                  {results.metrics.n_outliers !== undefined && (
+                  {metrics.n_outliers !== undefined && (
                     <Typography variant="caption" color="text.secondary">
-                      {results.metrics.n_outliers} outliers
+                      {metrics.n_outliers} outliers
                     </Typography>
                   )}
                 </CardContent>
@@ -106,6 +108,32 @@ function ResultsDisplay({ results, model }) {
             </Grid>
           )}
         </Grid>
+      </Box>
+    );
+
+    return (
+      <Box>
+        <Typography variant="h5" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CheckCircleIcon color="success" />
+          Clustering Results
+        </Typography>
+
+        {renderMetricsGrid(trainMetrics, "Training Data Performance")}
+        
+        {testMetrics && (
+          <>
+            <Divider sx={{ my: 3 }} />
+            {renderMetricsGrid(testMetrics, "Test Data Performance")}
+            
+            {/* Show generalization alert if test performance is significantly lower */}
+            {trainMetrics.silhouette_score && testMetrics.silhouette_score && 
+             testMetrics.silhouette_score < trainMetrics.silhouette_score * 0.5 && (
+              <Alert severity="warning" sx={{ mt: 2 }}>
+                Model may be overfitting - test performance is significantly lower than training performance.
+              </Alert>
+            )}
+          </>
+        )}
 
         {results.output_files && results.output_files.length > 0 && (
           <Box sx={{ mt: 4 }}>
