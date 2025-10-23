@@ -1,16 +1,18 @@
+import json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error, r2_score
+from sklearn.feature_selection import SelectKBest, f_regression, mutual_info_regression
+from sklearn.ensemble import RandomForestRegressor
 
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import SimpleRNN, Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.optimizers import Adam
 
 import warnings
@@ -27,21 +29,23 @@ RESULTS_DIR = PROJECT_ROOT / 'results' / 'forecasting'
 MODELS_DIR = PROJECT_ROOT / 'src' / 'models' / 'forecasting'
 
 
-class SRNNForecastingPipeline:
+class SRNNEngineeredPipeline:
     def __init__(self):
-        """Initialize the forecasting pipeline."""
+        """Initialize the forecasting pipeline with engineered features."""
         # Fixed parameters
-        self.train_data_path = DATA_DIR / 'features_for_forecasting_train_improved.csv'
-        self.test_data_path = DATA_DIR / 'features_for_forecasting_test_improved.csv'
-        self.sequence_length = 24  # 24 hours = 1 day of history
+        self.train_data_path = DATA_DIR / 'features_engineered_train_improved.csv'
+        self.test_data_path = DATA_DIR / 'features_engineered_test_improved.csv'
+        self.sequence_length = 32
         self.forecast_horizon = 1  # Predict next hour
         
-        # Column mappings for improved CSV
+        # Column mappings
         self.target_columns = ['avg_latency', 'upload_bitrate', 'download_bitrate']
-        self.feature_columns = ['hour', 'is_peak_hours', 'avg_latency_lag1', 
-                               'upload_bitrate_mbits/sec_lag1', 'download_bitrate_rx_mbits/sec_lag1']
-        self.day_column = 'day'
-        self.square_column = 'square_id'
+        self.feature_columns = None  # Will be determined dynamically
+        self.selected_features = None  # Will store selected features
+        
+        # Feature selection parameters
+        self.max_features = 15  # Maximum number of features to select
+        self.feature_selection_method = 'mutual_info'  # 'mutual_info', 'f_regression', or 'random_forest'
         
         # Initialize attributes
         self.scaler = None
@@ -54,8 +58,8 @@ class SRNNForecastingPipeline:
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
     
     def load_data(self):
-        """Load and prepare the forecasting datasets."""
-        print("Loading forecasting datasets...")
+        """Load and prepare the engineered forecasting datasets with automatic categorical encoding."""
+        print("Loading engineered forecasting datasets...")
         
         # Load training data
         train_df = pd.read_csv(self.train_data_path)
@@ -65,70 +69,140 @@ class SRNNForecastingPipeline:
         print(f"Test data shape: {test_df.shape}")
         print(f"Available columns: {list(train_df.columns)}")
         
-        # Handle missing values
-        train_df = train_df.fillna(method='ffill').fillna(method='bfill')
-        test_df = test_df.fillna(method='ffill').fillna(method='bfill')
+        # Handle missing values - use median imputation
+        train_df = train_df.replace([np.inf, -np.inf], np.nan)
+        test_df = test_df.replace([np.inf, -np.inf], np.nan)
         
-        # Convert categorical day to ordinal (Monday=0, ..., Sunday=6)
-        day_mapping = {
-            'Monday': 0, 'Tuesday': 1, 'Wednesday': 2, 'Thursday': 3,
-            'Friday': 4, 'Saturday': 5, 'Sunday': 6
-        }
-        train_df['day_encoded'] = train_df[self.day_column].map(day_mapping)
-        test_df['day_encoded'] = test_df[self.day_column].map(day_mapping)
+        # Fill missing values with median for numeric columns
+        for col in train_df.select_dtypes(include=[np.number]).columns:
+            if col in test_df.columns:
+                median_val = train_df[col].median()
+                train_df[col] = train_df[col].fillna(median_val)
+                test_df[col] = test_df[col].fillna(median_val)
         
-        # Fill any unmapped days with mode
-        train_df['day_encoded'] = train_df['day_encoded'].fillna(train_df['day_encoded'].mode()[0])
-        test_df['day_encoded'] = test_df['day_encoded'].fillna(test_df['day_encoded'].mode()[0])
+        # Automatically detect and encode categorical columns
+        categorical_cols = train_df.select_dtypes(include=['object', 'category']).columns.tolist()
+        print(f"Detected categorical columns: {categorical_cols}")
+        
+        # Encode categorical columns using LabelEncoder
+        for col in categorical_cols:
+            if col in test_df.columns:
+                # Fit encoder on combined data to ensure consistent encoding
+                combined_data = pd.concat([train_df[col], test_df[col]], axis=0)
+                le = LabelEncoder()
+                le.fit(combined_data.astype(str))
+                
+                # Transform both train and test
+                train_df[f'{col}_encoded'] = le.transform(train_df[col].astype(str))
+                test_df[f'{col}_encoded'] = le.transform(test_df[col].astype(str))
+                
+                print(f"Encoded {col} -> {col}_encoded")
+        
+        # Check if target columns exist and filter to available ones
+        available_targets = [col for col in self.target_columns if col in train_df.columns]
+        if len(available_targets) != len(self.target_columns):
+            missing_targets = [col for col in self.target_columns if col not in train_df.columns]
+            print(f"Warning: Missing target columns: {missing_targets}")
+            self.target_columns = available_targets
+        
+        # Determine feature columns dynamically (all numeric features except targets)
+        numeric_cols = train_df.select_dtypes(include=[np.number]).columns.tolist()
+        self.feature_columns = [col for col in numeric_cols if col not in self.target_columns]
         
         print("Data loaded successfully!")
-        print(f"Unique squares in train: {train_df[self.square_column].nunique()}")
-        print(f"Unique squares in test: {test_df[self.square_column].nunique()}")
+        print(f"Total features available: {len(self.feature_columns)}")
+        print(f"Feature columns: {self.feature_columns[:10]}...")  # Show first 10
         
         return train_df, test_df
     
-    def create_sequences(self, data):
-        """Create sequences for SRNN training with proper temporal ordering."""
+    def select_features(self, X_train, y_train, target_idx=0):
+        """Select the most important features using various methods."""
+        print(f"\nPerforming feature selection for target: {self.target_columns[target_idx]}")
+        print(f"Original features: {X_train.shape[1]}")
+        
+        # Get target for feature selection
+        y_target = y_train[:, target_idx] if y_train.ndim > 1 else y_train
+        
+        if self.feature_selection_method == 'mutual_info':
+            # Mutual information based selection
+            selector = SelectKBest(score_func=mutual_info_regression, k=min(self.max_features, X_train.shape[1]))
+            X_selected = selector.fit_transform(X_train, y_target)
+            selected_indices = selector.get_support(indices=True)
+            
+        elif self.feature_selection_method == 'f_regression':
+            # F-statistic based selection
+            selector = SelectKBest(score_func=f_regression, k=min(self.max_features, X_train.shape[1]))
+            X_selected = selector.fit_transform(X_train, y_target)
+            selected_indices = selector.get_support(indices=True)
+            
+        elif self.feature_selection_method == 'random_forest':
+            # Random Forest based feature importance
+            rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            rf.fit(X_train, y_target)
+            
+            # Get feature importances and select top features
+            importances = rf.feature_importances_
+            selected_indices = np.argsort(importances)[-self.max_features:]
+            X_selected = X_train[:, selected_indices]
+            
+        else:
+            raise ValueError(f"Unknown feature selection method: {self.feature_selection_method}")
+        
+        # Store selected feature names
+        self.selected_features = [self.feature_columns[i] for i in selected_indices]
+        
+        print(f"Selected features: {len(self.selected_features)}")
+        print(f"Selected feature names: {self.selected_features[:10]}...")  # Show first 10
+        
+        return X_selected, selected_indices
+    
+    def create_sequences(self, data, selected_indices):
+        """Create sequences for SRNN training using simple rolling window approach."""
         X, y = [], []
         
-        # Group by square_id to create sequences for each location
-        for square_id, group in data.groupby(self.square_column):
-            # Sort by day_encoded and hour to ensure proper temporal order
-            group = group.sort_values(['day_encoded', 'hour']).reset_index(drop=True)
-            
-            # Only process if group has enough data
-            if len(group) < self.sequence_length + self.forecast_horizon:
-                continue
-            
-            # Prepare features and targets
-            features = group[self.feature_columns].values
-            targets = group[self.target_columns].values
-            
-            # Create sequences
-            for i in range(len(group) - self.sequence_length - self.forecast_horizon + 1):
-                X.append(features[i:i + self.sequence_length])
-                y.append(targets[i + self.sequence_length:i + self.sequence_length + self.forecast_horizon])
+        # Use data as-is for simple rolling window approach
+        data = data.reset_index(drop=True)
+        
+        # Prepare features and targets using selected features only
+        features = data[self.feature_columns].values[:, selected_indices].astype(np.float32)  # Use float32 to save memory
+        targets = data[self.target_columns].values.astype(np.float32)  # Use float32 to save memory
+        
+        # Create sequences using simple sliding window
+        for i in range(self.sequence_length, len(features)):
+            X.append(features[i - self.sequence_length:i])
+            y.append(targets[i])
         
         return np.array(X), np.array(y)
     
     def preprocess_data(self, train_df, test_df):
-        """Preprocess data for SRNN training."""
-        print("Preprocessing data...")
+        """Preprocess data for SRNN training with feature selection."""
+        print("Preprocessing data with feature selection...")
         
-        # Create sequences
-        X_train, y_train = self.create_sequences(train_df)
-        X_test, y_test = self.create_sequences(test_df)
+        # Prepare data for feature selection (use all features initially)
+        X_train_full = train_df[self.feature_columns].values
+        y_train_full = train_df[self.target_columns].values
+        
+        # Select features for each target (use first target for feature selection)
+        X_train_selected, selected_indices = self.select_features(X_train_full, y_train_full, target_idx=0)
+        
+        # Create sequences using selected features
+        X_train, y_train = self.create_sequences(train_df, selected_indices)
+        X_test, y_test = self.create_sequences(test_df, selected_indices)
         
         print(f"Training sequences: {X_train.shape}")
         print(f"Test sequences: {X_test.shape}")
         
-        # Split training data into train/validation
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_train, y_train, test_size=0.2, random_state=42
-        )
+        # Save sequences as CSV before splitting
+        self.save_sequences_as_csv(X_train, X_test, y_train, y_test, selected_indices)
         
-        # Initialize and fit scaler
-        self.scaler = StandardScaler()
+        # Split training data into train/validation
+        n = len(X_train)
+        n_val = int(0.15 * n)  # Use 15% for validation
+        X_val, y_val = X_train[-n_val:], y_train[-n_val:]
+        X_train, y_train = X_train[:-n_val], y_train[:-n_val]
+        
+        # Use MinMaxScaler for better RNN performance
+        self.scaler = MinMaxScaler()
         
         # Reshape for scaling
         n_samples, n_timesteps, n_features = X_train.shape
@@ -142,68 +216,105 @@ class SRNNForecastingPipeline:
         print("Data preprocessing completed!")
         return X_train_scaled, X_val_scaled, X_test_scaled, y_train, y_val, y_test
     
+    def save_sequences_as_csv(self, X_train, X_test, y_train, y_test, selected_indices):
+        """Save concatenated X and y sequences as CSV files."""
+        print("Saving sequences as CSV files...")
+        
+        # Get selected feature names
+        selected_feature_names = [self.feature_columns[i] for i in selected_indices]
+        
+        # Flatten sequences for CSV format
+        # X_train shape: (samples, sequence_length, features)
+        # We'll flatten to (samples, sequence_length * features)
+        n_samples_train, n_timesteps, n_features = X_train.shape
+        n_samples_test = X_test.shape[0]
+        
+        # Create column names for flattened sequences
+        sequence_columns = []
+        for t in range(n_timesteps):
+            for f in range(n_features):
+                sequence_columns.append(f"t{t}_{selected_feature_names[f]}")
+        
+        # Flatten X data
+        X_train_flat = X_train.reshape(n_samples_train, -1)
+        X_test_flat = X_test.reshape(n_samples_test, -1)
+        
+        # Create DataFrames
+        train_df = pd.DataFrame(X_train_flat, columns=sequence_columns)
+        test_df = pd.DataFrame(X_test_flat, columns=sequence_columns)
+        
+        # Add target columns
+        for i, target_col in enumerate(self.target_columns):
+            train_df[target_col] = y_train[:, i]
+            test_df[target_col] = y_test[:, i]
+        
+        # Save to CSV
+        train_path = str(DATA_DIR / "srnn_train_sequences.csv")
+        test_path = str(DATA_DIR / "srnn_test_sequences.csv")
+        
+        train_df.to_csv(train_path, index=False)
+        test_df.to_csv(test_path, index=False)
+        
+        print(f"Training sequences saved to: {train_path}")
+        print(f"Test sequences saved to: {test_path}")
+        print(f"Training shape: {train_df.shape}")
+        print(f"Test shape: {test_df.shape}")
+        
+        return train_path, test_path
+    
     def build_model(self, n_features, n_targets, rnn_units, dropout_rate, learning_rate):
         """Build SRNN model for forecasting."""
         model = Sequential()
         
-        # First RNN layer
-        model.add(SimpleRNN(rnn_units[0], return_sequences=True, 
+        # Single RNN layer
+        model.add(SimpleRNN(rnn_units, return_sequences=False, 
                            input_shape=(self.sequence_length, n_features)))
         model.add(Dropout(dropout_rate))
         
-        # Second RNN layer
-        model.add(SimpleRNN(rnn_units[1], return_sequences=False))
+        # Dense layers
+        model.add(Dense(64, activation='relu'))
         model.add(Dropout(dropout_rate))
-        
-        # Intermediate Dense layer with ReLU for non-linearity
-        model.add(Dense(max(16, rnn_units[1] // 2), activation='relu'))
-        model.add(Dropout(dropout_rate * 0.5))  # Lighter dropout for Dense
+        model.add(Dense(32, activation='relu'))
+        model.add(Dropout(dropout_rate * 0.5))
         
         # Output layer
         model.add(Dense(n_targets))
         
-        # Compile model with Huber loss (robust to outliers) and multiple metrics
+        # Compile model with MSE loss
         model.compile(
             optimizer=Adam(learning_rate=learning_rate),
-            loss='huber',  # More robust than MSE, less sensitive to outliers
-            metrics=[
-                'mae',      # Mean Absolute Error (interpretable)
-                'mse',      # Mean Squared Error (for comparison)
-                tf.keras.metrics.RootMeanSquaredError(name='rmse')  # RMSE (same units as target)
-            ]
+            loss='mse',
+            metrics=['mae', 'mse']
         )
         
         return model
     
     def hyperparameter_tuning(self, X_train, X_val, y_train, y_val, n_trials=3):
-        """Perform hyperparameter tuning with 3 carefully selected configurations."""
-        print("Starting hyperparameter tuning with 3 optimized configurations...")
+        """Perform hyperparameter tuning with simplified configurations."""
+        print("Starting hyperparameter tuning with simplified configurations...")
         
-        # Three most promising configurations based on RNN forecasting best practices:
-        # 1. Balanced: Medium capacity, moderate regularization
-        # 2. Lightweight: Fast training, good for limited compute
-        # 3. Deep: Higher capacity for complex patterns
+        # Simplified configurations
         configurations = [
             {
-                'name': 'Balanced',
-                'rnn_units': [64, 32],
-                'dropout_rate': 0.3,
-                'batch_size': 32,
+                'name': 'Simple',
+                'rnn_units': 48,
+                'dropout_rate': 0.1,
+                'batch_size': 128,
                 'learning_rate': 0.001
             },
             {
-                'name': 'Lightweight',
-                'rnn_units': [32, 16],
+                'name': 'Medium',
+                'rnn_units': 64,
                 'dropout_rate': 0.2,
                 'batch_size': 64,
                 'learning_rate': 0.001
             },
             {
-                'name': 'Deep',
-                'rnn_units': [128, 64],
-                'dropout_rate': 0.4,
+                'name': 'Large',
+                'rnn_units': 96,
+                'dropout_rate': 0.3,
                 'batch_size': 32,
-                'learning_rate': 0.0001
+                'learning_rate': 0.0005
             }
         ]
         
@@ -235,9 +346,9 @@ class SRNNForecastingPipeline:
             history = model.fit(
                 X_train, y_train,
                 validation_data=(X_val, y_val),
-                epochs=30,  # Reduced for faster tuning
+                epochs=15,  # Reduced for faster tuning
                 batch_size=config['batch_size'],
-                callbacks=[EarlyStopping(patience=5, restore_best_weights=True, verbose=0)],
+                callbacks=[EarlyStopping(patience=3, restore_best_weights=True, verbose=0)],
                 verbose=1
             )
             
@@ -278,25 +389,19 @@ class SRNNForecastingPipeline:
             batch_size = self.best_params['batch_size']
             learning_rate = self.best_params['learning_rate']
         else:
-            rnn_units = [64, 32]
-            dropout_rate = 0.2
-            batch_size = 32
-            learning_rate = 0.0001
+            rnn_units = 48
+            dropout_rate = 0.1
+            batch_size = 128
+            learning_rate = 0.001
         
         self.model = self.build_model(n_features, n_targets, rnn_units, dropout_rate, learning_rate)
         
         # Callbacks
         callbacks = [
             EarlyStopping(
-                monitor='val_mae',  # Monitor MAE (more interpretable than Huber loss)
+                monitor='val_mae',
                 patience=7,
                 restore_best_weights=True,
-                verbose=1
-            ),
-            ModelCheckpoint(
-                str(MODELS_DIR / 'srnn_forecasting_model.h5'),
-                monitor='val_mae',  # Save best model based on MAE
-                save_best_only=True,
                 verbose=1
             )
         ]
@@ -305,7 +410,7 @@ class SRNNForecastingPipeline:
         self.training_history = self.model.fit(
             X_train, y_train,
             validation_data=(X_val, y_val),
-            epochs=100,
+            epochs=15,  # Reduced epochs
             batch_size=batch_size,
             callbacks=callbacks,
             verbose=1
@@ -377,13 +482,13 @@ class SRNNForecastingPipeline:
         
         fig, axes = plt.subplots(2, 2, figsize=(15, 10))
         
-        # Plot Huber Loss
+        # Plot Loss
         ax1 = axes[0, 0]
-        ax1.plot(self.training_history.history['loss'], label='Training Loss (Huber)', alpha=0.8)
-        ax1.plot(self.training_history.history['val_loss'], label='Validation Loss (Huber)', alpha=0.8)
-        ax1.set_title('Model Loss (Huber)')
+        ax1.plot(self.training_history.history['loss'], label='Training Loss', alpha=0.8)
+        ax1.plot(self.training_history.history['val_loss'], label='Validation Loss', alpha=0.8)
+        ax1.set_title('Model Loss')
         ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('Huber Loss')
+        ax1.set_ylabel('Loss')
         ax1.legend()
         ax1.grid(True, alpha=0.3)
         
@@ -397,28 +502,35 @@ class SRNNForecastingPipeline:
         ax2.legend()
         ax2.grid(True, alpha=0.3)
         
-        # Plot RMSE
+        # Plot RMSE (calculate from MSE)
         ax3 = axes[1, 0]
-        ax3.plot(self.training_history.history['rmse'], label='Training RMSE', alpha=0.8)
-        ax3.plot(self.training_history.history['val_rmse'], label='Validation RMSE', alpha=0.8)
+        train_rmse = np.sqrt(self.training_history.history['mse'])
+        val_rmse = np.sqrt(self.training_history.history['val_mse'])
+        ax3.plot(train_rmse, label='Training RMSE', alpha=0.8)
+        ax3.plot(val_rmse, label='Validation RMSE', alpha=0.8)
         ax3.set_title('Root Mean Squared Error')
         ax3.set_xlabel('Epoch')
         ax3.set_ylabel('RMSE')
         ax3.legend()
         ax3.grid(True, alpha=0.3)
         
-        # Plot MSE
+        # Feature selection info
         ax4 = axes[1, 1]
-        ax4.plot(self.training_history.history['mse'], label='Training MSE', alpha=0.8)
-        ax4.plot(self.training_history.history['val_mse'], label='Validation MSE', alpha=0.8)
-        ax4.set_title('Mean Squared Error')
-        ax4.set_xlabel('Epoch')
-        ax4.set_ylabel('MSE')
-        ax4.legend()
-        ax4.grid(True, alpha=0.3)
+        ax4.text(0.1, 0.9, f"Feature Selection Method: {self.feature_selection_method}", 
+                transform=ax4.transAxes, fontsize=12, fontweight='bold')
+        ax4.text(0.1, 0.7, f"Selected Features: {len(self.selected_features)}", 
+                transform=ax4.transAxes, fontsize=12)
+        ax4.text(0.1, 0.5, f"Max Features: {self.max_features}", 
+                transform=ax4.transAxes, fontsize=12)
+        ax4.text(0.1, 0.3, f"Sequence Length: {self.sequence_length}", 
+                transform=ax4.transAxes, fontsize=12)
+        ax4.text(0.1, 0.1, f"Total Features: {len(self.feature_columns)}", 
+                transform=ax4.transAxes, fontsize=12)
+        ax4.set_title('Model Configuration')
+        ax4.axis('off')
         
         plt.tight_layout()
-        plt.savefig(str(RESULTS_DIR / "training_history.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(str(RESULTS_DIR / "srnn_engineered_training_history.png"), dpi=300, bbox_inches='tight')
         plt.show()
     
     def plot_predictions(self, y_test, y_pred):
@@ -451,29 +563,29 @@ class SRNNForecastingPipeline:
             n_points = min(1000, len(y_test))
             ax.plot(y_test[:n_points, i], label='Actual', alpha=0.7)
             ax.plot(y_pred[:n_points, i], label='Predicted', alpha=0.7)
-            ax.set_title(f'{target_name} - Actual vs Predicted')
+            ax.set_title(f'{target_name} - Actual vs Predicted (Engineered Features)')
             ax.set_xlabel('Time Steps')
             ax.set_ylabel('Value')
             ax.legend()
             ax.grid(True)
         
         plt.tight_layout()
-        plt.savefig(str(RESULTS_DIR / "predictions.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(str(RESULTS_DIR / "srnn_engineered_predictions.png"), dpi=300, bbox_inches='tight')
         plt.show()
     
     def run_full_pipeline(self, skip_tuning=False):
-        """Run the complete forecasting pipeline.
+        """Run the complete forecasting pipeline with engineered features.
         
         Args:
-            skip_tuning: If True, skip hyperparameter tuning and use Balanced config
+            skip_tuning: If True, skip hyperparameter tuning and use Simple config
         """
-        print("Starting SRNN Forecasting Pipeline...")
-        print("=" * 50)
+        print("Starting SRNN Forecasting Pipeline with Engineered Features...")
+        print("=" * 60)
         
         # 1. Load data
         train_df, test_df = self.load_data()
         
-        # 2. Preprocess data
+        # 2. Preprocess data with feature selection
         X_train, X_val, X_test, y_train, y_val, y_test = self.preprocess_data(train_df, test_df)
         
         # 3. Hyperparameter tuning (optional)
@@ -482,10 +594,10 @@ class SRNNForecastingPipeline:
             print("SKIPPING HYPERPARAMETER TUNING")
             print("="*60)
             self.best_params = {
-                'rnn_units': [128, 64],
-                'dropout_rate': 0.4,
-                'batch_size': 32,
-                'learning_rate': 0.0001
+                'rnn_units': 48,
+                'dropout_rate': 0.1,
+                'batch_size': 128,
+                'learning_rate': 0.001
             }
             print(f"\nConfiguration:")
             print(f"  RNN Units: {self.best_params['rnn_units']}")
@@ -508,23 +620,46 @@ class SRNNForecastingPipeline:
         
         # 7. Save results
         results_df = pd.DataFrame([metrics])
-        results_df.to_csv(str(RESULTS_DIR / "evaluation_metrics.csv"), index=False)
+        results_df.to_csv(str(RESULTS_DIR / "srnn_engineered_evaluation_metrics.csv"), index=False)
+        
+        # 8. Save per-target results for comparison script
+        per_target_results = []
+        if y_test.shape[1] > 1:
+            for i, target_name in enumerate(self.target_columns):
+                target_mae = mean_absolute_error(y_test[:, i], y_pred[:, i])
+                target_rmse = np.sqrt(mean_squared_error(y_test[:, i], y_pred[:, i]))
+                target_r2 = r2_score(y_test[:, i], y_pred[:, i])
+                per_target_results.append({
+                    'target': target_name,
+                    'model': 'SRNN-Engineered',
+                    'mae': target_mae,
+                    'rmse': target_rmse,
+                    'r2': target_r2
+                })
+        
+        per_target_df = pd.DataFrame(per_target_results)
+        per_target_df.to_csv(str(MODELS_DIR / "srnnEngineeredResults.csv"), index=False)
+        print(f"Per-target results saved to: {MODELS_DIR / 'srnnEngineeredResults.csv'}")
+        
+        # 9. Save feature selection info
+        feature_info = {
+            'method': self.feature_selection_method,
+            'max_features': self.max_features,
+            'selected_features': self.selected_features,
+            'n_selected': len(self.selected_features)
+        }
+        
+        with open(str(MODELS_DIR / "srnn_engineered_feature_info.json"), 'w') as f:
+            json.dump(feature_info, f, indent=2)
         
         print("Pipeline completed successfully!")
         return metrics, y_pred
 
 
-def main():
-    """Main function to run the forecasting pipeline."""
+if __name__ == "__main__":
     # Initialize and run pipeline
-    pipeline = SRNNForecastingPipeline()
+    pipeline = SRNNEngineeredPipeline()
     
-    # Skip hyperparameter tuning and use Balanced configuration
+    # Skip hyperparameter tuning and use Simple configuration
     # Set skip_tuning=False to run 3-trial tuning (recommended if you have time/resources)
     metrics, predictions = pipeline.run_full_pipeline(skip_tuning=True)
-    
-    return pipeline, metrics, predictions
-
-
-if __name__ == "__main__":
-    pipeline, metrics, predictions = main()
