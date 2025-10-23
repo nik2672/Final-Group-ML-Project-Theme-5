@@ -25,7 +25,7 @@ TEST_CSV  = os.path.join(DATA_DIR, "features_for_forecasting_test.csv")
 
 IS_M_SERIES = platform.system() == "Darwin" and platform.machine() == "arm64"
 
-def _norm_names(df: pd.DataFrame) -> pd.DataFrame:
+def _norm_names(df: pd.DataFrame) -> pd.DataFrame:#lower case header fix and noramlises messalases  so theyre conssitant 
     m = {c: c.lower().strip() for c in df.columns}
     df = df.rename(columns=m)
     ren = {
@@ -43,25 +43,25 @@ def _norm_names(df: pd.DataFrame) -> pd.DataFrame:
             df = df.rename(columns={k: v})
     return df
 
-def _clean_features(train_df: pd.DataFrame, test_df: pd.DataFrame, feats):
+def _clean_features(train_df: pd.DataFrame, test_df: pd.DataFrame, feats):#replace +inf with nan, putes trian median per features, then fils nans with both train/test -> returns numpy arrays X_tr, X_te 
     trX = train_df[feats].replace([np.inf, -np.inf], np.nan)
     med = trX.median()
     X_tr = trX.fillna(med).values
     X_te = test_df[feats].replace([np.inf, -np.inf], np.nan).fillna(med).values
     return X_tr, X_te
 
-def _clean_targets(train_df: pd.DataFrame, test_df: pd.DataFrame, target: str):
-    y_tr = train_df[target].astype(float).replace([np.inf, -np.inf], np.nan)
+def _clean_targets(train_df: pd.DataFrame, test_df: pd.DataFrame, target: str):#coorces target to a float tuns Inf -> NAN, builds bulian masks m_tr, m_te indicating on NAN targets | reuturns y_tr, y_te (with nans dopped + the masks )
+    y_tr = train_df[target].astype(float).replace([np.inf, -np.inf], np.nan)#WHY? metrics need real target vlaeu; test rows with missing target cant be scored, so you dorp them cleanly 
     y_te = test_df[target].astype(float).replace([np.inf, -np.inf], np.nan)
     # Drop NaN targets independently per split
     m_tr = y_tr.notna().values
     m_te = y_te.notna().values
     return y_tr.values[m_tr], y_te.values[m_te], m_tr, m_te
 
-def _align_after_target_mask(X_tr, X_te, m_tr, m_te):
+def _align_after_target_mask(X_tr, X_te, m_tr, m_te):#what is does: applies target masks to teh feature matricies, so X and y stay aligned row by row; why: when you drop target NANs you msut drop the same rows from features
     return X_tr[m_tr], X_te[m_te]
 
-def run_xgboost(train_df: pd.DataFrame, test_df: pd.DataFrame, target: str):
+def run_xgboost(train_df: pd.DataFrame, test_df: pd.DataFrame, target: str):#core training/eval | 1. copy splits tr,te | 2. feature slist feats =keep only columsn that exsit in both splits and are not the target | 3. categorical encoding -> concatinte train + test column as a single categorical then takes codes for each split with a shared category set , why ensures (IDS square_id, hour, dayy map t teh same integrers in train and test )
     # Encode categoricals consistently across splits
     tr = train_df.copy()
     te = test_df.copy()
@@ -92,7 +92,7 @@ def run_xgboost(train_df: pd.DataFrame, test_df: pd.DataFrame, target: str):
     if X_tr.shape[0] == 0 or X_te.shape[0] == 0:
         raise ValueError(f"No data left after cleaning for target='{target}'")
 
-    params = dict(
+    params = dict(#peramsn are good fro tabular forecasting 
         n_estimators=300,
         learning_rate=0.08,
         max_depth=6,
@@ -103,12 +103,12 @@ def run_xgboost(train_df: pd.DataFrame, test_df: pd.DataFrame, target: str):
         tree_method="hist" if IS_M_SERIES else "auto",
     )
 
-    model = XGBRegressor(**params)
+    model = XGBRegressor(**params)#best perams 
     model.fit(X_tr, y_tr)
 
     y_pred = model.predict(X_te)
 
-    mae  = mean_absolute_error(y_te, y_pred)
+    mae  = mean_absolute_error(y_te, y_pred)#mean absoluee errro, rmse penalizes big erors r^2 variance exlaned non safe when y vairance is 0 
     rmse = np.sqrt(((y_te - y_pred) ** 2).mean())
     r2   = r2_score(y_te, y_pred) if len(np.unique(y_te)) > 1 else np.nan
 
@@ -123,7 +123,7 @@ def run_xgboost(train_df: pd.DataFrame, test_df: pd.DataFrame, target: str):
         "R2": float(r2) if r2 == r2 else None,  # handle nan
     }
 
-def _plot_xgb_scatter(y_true, y_pred, target):
+def _plot_xgb_scatter(y_true, y_pred, target):#scatter of actual vs predicted and dashed y = x line. tight clustering on the line = good | residuals vs predicted with a dashed zzero line. a flat band aroudn 0 means low bias, patterns (U sharep) suggest under/overfit in ranges 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
     axes[0].scatter(y_true, y_pred, alpha=0.5, s=12)
@@ -146,7 +146,7 @@ def _plot_xgb_scatter(y_true, y_pred, target):
     fig.savefig(fp, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
-def _plot_xgb_feature_importance(model, feats, target, top_n=20):
+def _plot_xgb_feature_importance(model, feats, target, top_n=20):#gain based imporatnce bar chart; show sthe top contributers
     importances = model.feature_importances_
     n = min(top_n, len(importances))
     idx = np.argsort(importances)[::-1][:n]
