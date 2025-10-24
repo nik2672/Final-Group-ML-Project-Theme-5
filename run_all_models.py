@@ -13,21 +13,21 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent
 CLUSTERING_SCRIPT = PROJECT_ROOT / 'src' / 'models' / 'clustering' / 'main.py'
 FORECASTING_SCRIPT = PROJECT_ROOT / 'src' / 'models' / 'forecasting' / 'main.py'
-FEATURE_ENGINEERING_SCRIPT = PROJECT_ROOT / 'src' / 'features' / 'feature_engineering.py'
+FEATURE_ENGINEERING_SCRIPT = PROJECT_ROOT / 'src' / 'features' / 'leakage_safe_feature_engineering.py'
 
 def check_dependencies():
     """Check if required data files exist."""
     data_path = PROJECT_ROOT / 'data'
-    clustering_features = data_path / 'features_for_clustering.csv'
-    forecasting_features = data_path / 'features_for_forecasting.csv'
+    features_train = data_path / 'features_engineered_train_improved.csv'
+    features_test = data_path / 'features_engineered_test_improved.csv'
 
-    if not clustering_features.exists() or not forecasting_features.exists():
+    if not features_train.exists() or not features_test.exists():
         print("=" * 70)
         print("WARNING: Feature files not found!")
         print("=" * 70)
         print("\nRequired files:")
-        print(f"  - {clustering_features}")
-        print(f"  - {forecasting_features}")
+        print(f"  - {features_train}")
+        print(f"  - {features_test}")
         print("\nRunning feature engineering first...")
         print("-" * 70)
 
