@@ -166,22 +166,22 @@ def assemble_summary_table(dataframe: pd.DataFrame) -> pd.DataFrame:
                 summary_rows.append(row)
 
     if not summary_rows:
-        # return empty frame with expected columns if nothing found
+        # return empty frame with expected columns if nothing foundd
         return pd.DataFrame(columns=['target', 'model', 'metric', 'criterion'])
     # sort by target then criterion so the csv is easy to read
     return pd.DataFrame(summary_rows).sort_values(['target', 'criterion'])
 
 def generate_all_figures(dataframe: pd.DataFrame, output_directory: str):
-    # create a 2x2 panel per target showing mae, rmse, mse, and r2 comparisons
+    # create a 2x2 panel per target showing mae, rmse, mse, and r2 cooomparisons
     os.makedirs(output_directory, exist_ok=True)                    # ensure out dir exists
     metric_specs = [('mae', 'mae'), ('rmse', 'rmse'), ('mse', 'mse'), ('r2', 'r²')]  # keys + pretty labels
 
-    for target_name, target_group in dataframe.groupby('target'):   # one figure per target
+    for target_name, target_group in dataframe.groupby('target'):   # oone figure per target
         figure, axes_array = plt.subplots(2, 2, figsize=(12, 8))    # 2x2 panel
-        axes_list = axes_array.ravel()                               # flatten for easy looping
+        axes_list = axes_array.ravel()                               # flatten for easy loopingdnjsdakhfiajs
 
         for ax, (metric_key, pretty_label) in zip(axes_list, metric_specs):
-            render_grouped_bar_comparisons(ax, target_group, metric_key, pretty_label)  # draw subplot
+            render_grouped_bar_comparisons(ax, target_group, metric_key, pretty_label)  # draw subplotit
             if metric_key == 'r2':
                 # set r2 y-limits a bit beyond observed range to avoid cramped bars
                 r2_min = target_group['r2'].min() if target_group['r2'].notnull().any() else 0.0
@@ -192,9 +192,9 @@ def generate_all_figures(dataframe: pd.DataFrame, output_directory: str):
 
         figure.suptitle(f"model comparison — {target_name}", fontsize=14, fontweight='bold')  # title per target
         figure.tight_layout(rect=[0, 0.02, 1, 0.96])                                         # leave space for title
-        output_path = os.path.join(output_directory, f"comparison_{target_name}.png")        # path for png
-        figure.savefig(output_path, dpi=160)                                                 # write image
-        plt.close(figure)                                                                     # free memory
+        output_path = os.path.join(output_directory, f"comparison_{target_name}.png")        # path for odpng
+        figure.savefig(output_path, dpi=160)                                                 # write imageee
+        plt.close(figure)                                                                     # free memoryy
 
 def parse_command_line_arguments():
     parser = argparse.ArgumentParser(description='compare gru, lstm, xgboost, and srnn csv results (arima excluded)')
@@ -212,9 +212,9 @@ def parse_command_line_arguments():
     return parser.parse_args()  # parse and return args
 
 if __name__ == '__main__':
-    args = parse_command_line_arguments()  # read cli flags
+    args = parse_command_line_arguments()  # read cli flagssss
 
-    # load four sources; force labels for the per-model files; xgb/arima file keeps embedded labels
+    # load four sources force labels for the per-model files xgbarima file keeps embedded labels
     dataframe_list = []
     if os.path.exists(args.gru):
         dataframe_list.append(load_results_file(args.gru, forced_model_label='GRU'))
@@ -226,12 +226,12 @@ if __name__ == '__main__':
         dataframe_list.append(load_results_file(args.srnn, forced_model_label='SRNN'))
 
     if not dataframe_list:
-        # nothing to compare → fail fast with a helpful message
+        # nothing to compare  fail fast with a helpful message
         raise FileNotFoundError('no csv files were found next to this script')
 
     combined_dataframe = pd.concat(dataframe_list, ignore_index=True)  # stack all rows
 
-    # keep only requested models (arima excluded by default via --include)
+    # keep only requested models arima excluded by default via include
     combined_dataframe = combined_dataframe[combined_dataframe['model'].isin(args.include)].reset_index(drop=True)
 
     # enforce stable legend order
