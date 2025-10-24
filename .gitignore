@@ -45,6 +45,7 @@ results/
 *.csv
 *.pkl
 *.joblib
+*.json
 
 # Jupyter
 .ipynb_checkpoints/
