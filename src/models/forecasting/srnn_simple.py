@@ -38,13 +38,18 @@ class SRNNEngineeredPipeline:
         self.sequence_length = 32
         self.forecast_horizon = 1  # Predict next hour
         
-        # Column mappings
+        # Column mappings - try both renamed and original column names
         self.target_columns = ['avg_latency', 'upload_bitrate', 'download_bitrate']
+        # Fallback to original column names if renamed versions don't exist
+        self.target_column_mappings = {
+            'upload_bitrate': 'upload_bitrate_mbits/sec',
+            'download_bitrate': 'download_bitrate_rx_mbits/sec'
+        }
         self.feature_columns = None  # Will be determined dynamically
         self.selected_features = None  # Will store selected features
         
         # Feature selection parameters
-        self.max_features = 15  # Maximum number of features to select
+        self.max_features = 30  # Maximum number of features to select
         self.feature_selection_method = 'mutual_info'  # 'mutual_info', 'f_regression', or 'random_forest'
         
         # Initialize attributes
@@ -98,16 +103,35 @@ class SRNNEngineeredPipeline:
                 
                 print(f"Encoded {col} -> {col}_encoded")
         
-        # Check if target columns exist and filter to available ones
-        available_targets = [col for col in self.target_columns if col in train_df.columns]
+        # Check if target columns exist, try fallback names if needed
+        available_targets = []
+        for col in self.target_columns:
+            if col in train_df.columns:
+                available_targets.append(col)
+            elif col in self.target_column_mappings and self.target_column_mappings[col] in train_df.columns:
+                # Rename the original column to the expected name
+                orig_col = self.target_column_mappings[col]
+                train_df[col] = train_df[orig_col]
+                test_df[col] = test_df[orig_col]
+                available_targets.append(col)
+                print(f"Renamed '{orig_col}' to '{col}'")
+        
         if len(available_targets) != len(self.target_columns):
-            missing_targets = [col for col in self.target_columns if col not in train_df.columns]
+            missing_targets = [col for col in self.target_columns if col not in available_targets]
             print(f"Warning: Missing target columns: {missing_targets}")
-            self.target_columns = available_targets
+        
+        self.target_columns = available_targets
         
         # Determine feature columns dynamically (all numeric features except targets)
         numeric_cols = train_df.select_dtypes(include=[np.number]).columns.tolist()
-        self.feature_columns = [col for col in numeric_cols if col not in self.target_columns]
+        # Exclude datetime-related columns that might have been incorrectly parsed
+        datetime_keywords = ['time', 'Time', 'TIME', 'date', 'Date', 'DATE', 'Convert_time', 'DATES']
+        # Also exclude original column names that were renamed
+        original_target_names = list(self.target_column_mappings.values())
+        self.feature_columns = [col for col in numeric_cols 
+                               if col not in self.target_columns 
+                               and col not in datetime_keywords
+                               and col not in original_target_names]
         
         print("Data loaded successfully!")
         print(f"Total features available: {len(self.feature_columns)}")
@@ -178,6 +202,14 @@ class SRNNEngineeredPipeline:
         """Preprocess data for SRNN training with feature selection."""
         print("Preprocessing data with feature selection...")
         
+        # Only convert the relevant numeric columns to float32, not the entire dataframe
+        # This avoids errors with datetime or other string columns
+        for col in self.feature_columns + self.target_columns:
+            if col in train_df.columns:
+                train_df[col] = train_df[col].astype('float32')
+            if col in test_df.columns:
+                test_df[col] = test_df[col].astype('float32')
+
         # Prepare data for feature selection (use all features initially)
         X_train_full = train_df[self.feature_columns].values
         y_train_full = train_df[self.target_columns].values
@@ -191,9 +223,6 @@ class SRNNEngineeredPipeline:
         
         print(f"Training sequences: {X_train.shape}")
         print(f"Test sequences: {X_test.shape}")
-        
-        # Save sequences as CSV before splitting
-        self.save_sequences_as_csv(X_train, X_test, y_train, y_test, selected_indices)
         
         # Split training data into train/validation
         n = len(X_train)
@@ -215,52 +244,6 @@ class SRNNEngineeredPipeline:
         
         print("Data preprocessing completed!")
         return X_train_scaled, X_val_scaled, X_test_scaled, y_train, y_val, y_test
-    
-    def save_sequences_as_csv(self, X_train, X_test, y_train, y_test, selected_indices):
-        """Save concatenated X and y sequences as CSV files."""
-        print("Saving sequences as CSV files...")
-        
-        # Get selected feature names
-        selected_feature_names = [self.feature_columns[i] for i in selected_indices]
-        
-        # Flatten sequences for CSV format
-        # X_train shape: (samples, sequence_length, features)
-        # We'll flatten to (samples, sequence_length * features)
-        n_samples_train, n_timesteps, n_features = X_train.shape
-        n_samples_test = X_test.shape[0]
-        
-        # Create column names for flattened sequences
-        sequence_columns = []
-        for t in range(n_timesteps):
-            for f in range(n_features):
-                sequence_columns.append(f"t{t}_{selected_feature_names[f]}")
-        
-        # Flatten X data
-        X_train_flat = X_train.reshape(n_samples_train, -1)
-        X_test_flat = X_test.reshape(n_samples_test, -1)
-        
-        # Create DataFrames
-        train_df = pd.DataFrame(X_train_flat, columns=sequence_columns)
-        test_df = pd.DataFrame(X_test_flat, columns=sequence_columns)
-        
-        # Add target columns
-        for i, target_col in enumerate(self.target_columns):
-            train_df[target_col] = y_train[:, i]
-            test_df[target_col] = y_test[:, i]
-        
-        # Save to CSV
-        train_path = str(DATA_DIR / "srnn_train_sequences.csv")
-        test_path = str(DATA_DIR / "srnn_test_sequences.csv")
-        
-        train_df.to_csv(train_path, index=False)
-        test_df.to_csv(test_path, index=False)
-        
-        print(f"Training sequences saved to: {train_path}")
-        print(f"Test sequences saved to: {test_path}")
-        print(f"Training shape: {train_df.shape}")
-        print(f"Test shape: {test_df.shape}")
-        
-        return train_path, test_path
     
     def build_model(self, n_features, n_targets, rnn_units, dropout_rate, learning_rate):
         """Build SRNN model for forecasting."""
@@ -410,7 +393,7 @@ class SRNNEngineeredPipeline:
         self.training_history = self.model.fit(
             X_train, y_train,
             validation_data=(X_val, y_val),
-            epochs=15,  # Reduced epochs
+            epochs=50,  # Reduced epochs
             batch_size=batch_size,
             callbacks=callbacks,
             verbose=1
@@ -516,16 +499,11 @@ class SRNNEngineeredPipeline:
         
         # Feature selection info
         ax4 = axes[1, 1]
-        ax4.text(0.1, 0.9, f"Feature Selection Method: {self.feature_selection_method}", 
-                transform=ax4.transAxes, fontsize=12, fontweight='bold')
-        ax4.text(0.1, 0.7, f"Selected Features: {len(self.selected_features)}", 
-                transform=ax4.transAxes, fontsize=12)
-        ax4.text(0.1, 0.5, f"Max Features: {self.max_features}", 
-                transform=ax4.transAxes, fontsize=12)
-        ax4.text(0.1, 0.3, f"Sequence Length: {self.sequence_length}", 
-                transform=ax4.transAxes, fontsize=12)
-        ax4.text(0.1, 0.1, f"Total Features: {len(self.feature_columns)}", 
-                transform=ax4.transAxes, fontsize=12)
+        ax4.text(0.1, 0.9, f"Feature Selection Method: {self.feature_selection_method}", transform=ax4.transAxes, fontsize=12, fontweight='bold')
+        ax4.text(0.1, 0.7, f"Selected Features: {len(self.selected_features)}", transform=ax4.transAxes, fontsize=12)
+        ax4.text(0.1, 0.5, f"Max Features: {self.max_features}", transform=ax4.transAxes, fontsize=12)
+        ax4.text(0.1, 0.3, f"Sequence Length: {self.sequence_length}", transform=ax4.transAxes, fontsize=12)
+        ax4.text(0.1, 0.1, f"Total Features: {len(self.feature_columns)}", transform=ax4.transAxes, fontsize=12)
         ax4.set_title('Model Configuration')
         ax4.axis('off')
         
@@ -574,11 +552,7 @@ class SRNNEngineeredPipeline:
         plt.show()
     
     def run_full_pipeline(self, skip_tuning=False):
-        """Run the complete forecasting pipeline with engineered features.
-        
-        Args:
-            skip_tuning: If True, skip hyperparameter tuning and use Simple config
-        """
+        """Run the complete forecasting pipeline with engineered features."""
         print("Starting SRNN Forecasting Pipeline with Engineered Features...")
         print("=" * 60)
         
@@ -594,10 +568,10 @@ class SRNNEngineeredPipeline:
             print("SKIPPING HYPERPARAMETER TUNING")
             print("="*60)
             self.best_params = {
-                'rnn_units': 48,
-                'dropout_rate': 0.1,
-                'batch_size': 128,
-                'learning_rate': 0.001
+                'rnn_units': 96,
+                'dropout_rate': 0.3,
+                'batch_size': 32,
+                'learning_rate': 0.0005
             }
             print(f"\nConfiguration:")
             print(f"  RNN Units: {self.best_params['rnn_units']}")
@@ -638,8 +612,8 @@ class SRNNEngineeredPipeline:
                 })
         
         per_target_df = pd.DataFrame(per_target_results)
-        per_target_df.to_csv(str(MODELS_DIR / "srnnEngineeredResults.csv"), index=False)
-        print(f"Per-target results saved to: {MODELS_DIR / 'srnnEngineeredResults.csv'}")
+        per_target_df.to_csv(str(RESULTS_DIR / "srnnEngineeredResults.csv"), index=False)
+        print(f"Per-target results saved to: {RESULTS_DIR / 'srnnEngineeredResults.csv'}")
         
         # 9. Save feature selection info
         feature_info = {
@@ -649,7 +623,7 @@ class SRNNEngineeredPipeline:
             'n_selected': len(self.selected_features)
         }
         
-        with open(str(MODELS_DIR / "srnn_engineered_feature_info.json"), 'w') as f:
+        with open(str(RESULTS_DIR / "srnn_engineered_feature_info.json"), 'w') as f:
             json.dump(feature_info, f, indent=2)
         
         print("Pipeline completed successfully!")
