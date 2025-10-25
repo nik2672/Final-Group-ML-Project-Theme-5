@@ -1,5 +1,4 @@
-# lean-ish GRU that works with the new train/test CSVs
-# Shapes cheat-sheet (super helpful)
+# lean-ish GRU that works with the new train/test csv
 """
 Before windowing:
 
