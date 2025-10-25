@@ -13,13 +13,14 @@ ML project for 5G network performance analysis using GPS-tagged latency and thro
 │   ├── preprocessing/     # Data preprocessing pipeline
 │   ├── features/         # Feature engineering
 │   └── models/           # ML models (clustering & forecasting)
-│       ├── clustering/   # K-Means, DBSCAN
-│       └── forecasting/  # XGBoost, ARIMA
+│       ├── clustering/   # K-Means, DBSCAN, HDBSCAN, BIRCH, OPTICS
+│       └── forecasting/  # XGBoost, ARIMA, SRNN, GRU, LSTM
 ├── notebooks/            # Jupyter notebooks for analysis/EDA
 ├── results/             # Model outputs and visualizations
 │   ├── clustering/      # Cluster assignments and plots
 │   └── forecasting/     # Predictions and metrics
 ├── docs/                # Project documentation
+├── ui/                  # Web interface for model training
 └── data/               # Data files (gitignored)
 ```
 
@@ -50,46 +51,98 @@ The pipeline must be executed in this specific order:
    - Input: `data/processed_data_no_imputation.csv`
    - Output: `data/processed_data_with_imputation.csv`
 
-4. **Feature Engineering** (`src/features/feature_engineering.py`)
+4. **Feature Engineering** (`src/features/leakage_sage_feature_engineering.py`)
    - Extracts temporal, spatial, and network performance features
    - Creates zone-level and day-level aggregations
    - Outputs 3 files optimized for different ML tasks
-   - Input: `data/my_clean_data_after_assurance.csv`
+   - Input: `data/processed_data_with_imputation.csv`
    - Outputs:
-     - `data/features_engineered.csv` - Full feature set
-     - `data/features_for_clustering.csv` - Clustering-optimized features
-     - `data/features_for_forecasting.csv` - Forecasting-optimized features
+     - `data/features_engineered_{train/test}_improved.csv` - Full feature set
+     - `data/features_for_clustering_{train/test} improved.csv` - Clustering-optimized features
+     - `data/features_for_forecasting_{train/test}_improved.csv` - Forecasting-optimized features
 
 ## Machine Learning Models
 
 The project implements clustering and forecasting models for network performance analysis.
 
-### Clustering Models (`src/models/clustering/main.py`)
+### Clustering Models
 
-**K-Means Clustering:**
-- Uses elbow method to determine optimal cluster count (k)
-- Evaluates using Silhouette Score and Davies-Bouldin Index
+The project implements and compares 5 clustering algorithms:
+
+**K-Means** (`kmeans_analysis.py`, `kmeans_final.py`):
+- Partitioning method that groups data into k clusters
+- Uses elbow method to determine optimal cluster count
 - Identifies geographic and performance-based network zones
-- Auto-selects optimal k based on silhouette score
+- Scripts: `kmeans_analysis.py` (exploration), `kmeans_final.py` (final model)
 
-**DBSCAN Clustering:**
-- Density-based clustering for odd-shaped clusters
+**DBSCAN** (`comparison.py`):
+- Density-based clustering for arbitrary-shaped clusters
 - Automatically detects outlier zones (anomalous network behavior)
 - No need to pre-specify cluster count
 - Useful for identifying problematic network areas
 
-### Forecasting Models (`src/models/forecasting/main.py`)
+**HDBSCAN** (`hdbscan_main.py`):
+- Hierarchical density-based clustering
+- Better noise handling than DBSCAN
+- Automatically determines optimal density thresholds
+- Requires: `conda install -c conda-forge hdbscan`
 
-**XGBoost (Primary Choice):**
+**BIRCH** (`comparison.py`):
+- Balanced Iterative Reducing and Clustering using Hierarchies
+- Memory-efficient for large datasets
+- Incrementally builds a cluster feature tree
+
+**OPTICS** (`comparison.py`):
+- Ordering Points To Identify Clustering Structure
+- Extension of DBSCAN for varying density clusters
+- Produces a reachability plot for cluster analysis
+
+**Model Comparison** (`comparison.py`, `tuning.py`):
+- `comparison.py`: Compares all 5 algorithms with standardized metrics
+- `tuning.py`: Hyperparameter optimization for clustering models
+- Evaluates using Silhouette Score, Davies-Bouldin Index, Calinski-Harabasz Score
+
+### Forecasting Models
+
+The project implements and compares multiple forecasting approaches:
+
+**XGBoost** (`xgb_arima.py`):
 - Gradient boosting regression for performance forecasting
 - Uses engineered features: lag values, rolling averages, temporal features
-- Provides feature importance analysis
-- Forecasts: avg_latency, upload_bitrate, download_bitrate
+- Provides feature importance analysis for interpretability
+- Forecasts: `avg_latency`, `upload_bitrate`, `download_bitrate`
+- Primary choice for multivariate forecasting
 
-**ARIMA (Statistical Baseline):**
-- Time series forecasting using ARIMA(2,1,2) model
-- Good for capturing temporal patterns in single metrics
-- Statistical baseline for comparison with XGBoost
+**ARIMA/SARIMA** (`xgb_arima.py`, `sarima_forecasting.py`):
+- Statistical time series forecasting
+- ARIMA(2,1,2) model for trend and autocorrelation
+- SARIMA extends ARIMA with seasonal components
+- Good baseline for univariate forecasting
+- Statistical comparison benchmark
+
+**Simple RNN (SRNN)** (`srnn_simple.py`):
+- Recurrent Neural Network with basic architecture
+- Captures temporal dependencies in time series
+- Multiple training runs with different random seeds
+- Outputs training history, predictions, and evaluation metrics
+
+**GRU** (`gru_LEAN.py`):
+- Gated Recurrent Unit neural network
+- More efficient than LSTM with similar performance
+- Better at capturing long-term dependencies than simple RNN
+- LEAN architecture optimized for time series
+
+**LSTM** (`lstm_model.py`):
+- Long Short-Term Memory neural network
+- Handles long-term dependencies and vanishing gradients
+- Standard deep learning approach for sequence prediction
+- Memory cells preserve information over time
+
+**Model Comparison** (`comparison_forcasting.py`):
+- Unified comparison framework for all forecasting models
+- Standardizes metrics across different model outputs (CSV files)
+- Generates per-target performance visualizations
+- Identifies best model for each metric (MAE, RMSE, R²)
 
 ## Running the Pipeline
 
@@ -98,6 +151,9 @@ The project implements clustering and forecasting models for network performance
 ```bash
 # Install dependencies
 pip install -r requirements.txt
+
+# Step 0: Exploratory data analysis (optional)
+jupyter notebook notebooks/partial_eda.ipynb
 
 # Step 1: Concatenate raw data files
 python src/preprocessing/concatenate.py
@@ -109,33 +165,48 @@ python src/preprocessing/cleaned_dataset_no_imputation.py
 python src/preprocessing/cleaned_dataset_with_imputation.py
 
 # Step 4: Feature engineering (REQUIRED before ML models)
-python src/features/feature_engineering.py
+python src/features/leakage_safe_feature_engineering.py
 
-# Step 5: Run all ML models (clustering + forecasting)
-python run_all_models.py
+# Step 5: Run all ML models individually (clustering + forecasting)
+python src/models/clustering/*.py
+python src/models/forecasting/*.py
 
-# OR run models individually:
-python src/models/clustering/main.py      # K-Means & DBSCAN
-python src/models/forecasting/main.py     # XGBoost & ARIMA
-
-# Step 6: Quality assurance (optional - Jupyter notebook)
+# Step 6: Quality assurance (optional)
 jupyter notebook notebooks/data_assurance.ipynb
 ```
 
 ### ML Model Outputs
 
 **Clustering results** (`results/clustering/`):
-- `elbow_analysis.png` - Optimal k selection plots
-- `kmeans_clusters.png` - K-Means visualization
-- `dbscan_clusters.png` - DBSCAN visualization
-- `kmeans_clusters.csv` - Cluster assignments
-- `dbscan_clusters.csv` - Cluster assignments with outliers
+- `kmeans_clusters.png` - K-Means cluster visualization
+- `dbscan_clusters.png` - DBSCAN cluster visualization
+- `hdbscan_clusters.png` - HDBSCAN cluster visualization
+- `birch_clusters.png` - BIRCH cluster visualization
+- `optics_clusters.png` - OPTICS cluster visualization
+- `elbow_analysis.png` - Optimal k selection for K-Means
+- `all_algorithms_comparison.png` - Side-by-side algorithm comparison
+- `algorithm_similarity_matrix.png` - Cluster assignment similarity heatmap
+- `performance_summary.png` - Metrics comparison across all algorithms
+- `*.csv` files - Cluster assignments and evaluation metrics
 
 **Forecasting results** (`results/forecasting/`):
-- `xgboost_*.png` - Predictions vs actual plots
-- `feature_importance_*.png` - Feature importance analysis
-- `arima_*.png` - ARIMA forecast plots
-- `model_comparison.csv` - Performance metrics (MAE, RMSE, R²)
+
+*XGBoost & ARIMA outputs:*
+- `xgboost_avg_latency.png` - XGBoost predictions for latency
+- `xgboost_upload_bitrate.png` - XGBoost predictions for upload
+- `xgboost_download_bitrate.png` - XGBoost predictions for download
+- `arima_avg_latency.png` - ARIMA predictions for latency
+- `arima_upload_bitrate.png` - ARIMA predictions for upload
+- `arima_download_bitrate.png` - ARIMA predictions for download
+- `feature_importance_*.png` - XGBoost feature importance (one per target metric)
+
+*Neural Network (SRNN) outputs:*
+- `srnn_engineered_predictions.png` (and variations 1, 2) - SRNN prediction plots
+- `srnn_engineered_training_history.png` (and variations 1, 2) - Loss curves over epochs
+- `srnn_engineered_evaluation_metrics.csv` (and variations 1, 2) - Performance metrics per target
+
+*Comparison outputs:*
+- Generated by `comparison_forcasting.py` - Unified metrics comparing all models
 
 ## Dataset Schema
 
@@ -164,18 +235,33 @@ All scripts use absolute paths derived from `os.path.dirname(os.path.abspath(__f
 ## Dependencies
 
 Core libraries (install via `pip install -r requirements.txt`):
-- **pandas** - Data manipulation and CSV processing
-- **numpy** - Numerical computations
-- **scikit-learn** - Preprocessing, clustering (K-Means, DBSCAN), evaluation metrics
-- **xgboost** - Gradient boosting for forecasting
-- **statsmodels** - ARIMA time series forecasting
-- **matplotlib** - Visualization and plotting
-- **scipy** - Statistical analysis (for data_assurance.ipynb)
-- **jupyter** - Interactive notebooks for EDA
+- **pandas** (≥1.5.0) - Data manipulation and CSV processing
+- **numpy** (≥1.23.0) - Numerical computations
+- **scikit-learn** (≥1.2.0) - Preprocessing, clustering (K-Means, DBSCAN, BIRCH, OPTICS), evaluation metrics
+- **xgboost** (≥1.7.0) - Gradient boosting for forecasting
+- **statsmodels** (≥0.14.0) - ARIMA/SARIMA time series forecasting
+- **tensorflow** (≥2.10.0) - Deep learning models (LSTM, GRU, Simple RNN)
+- **matplotlib** (≥3.6.0) - Visualization and plotting
+- **scipy** (≥1.10.0) - Statistical analysis (for data_assurance.ipynb)
+- **jupyter** (≥1.0.0) - Interactive notebooks for EDA
+- **tqdm** (≥4.65.0) - Progress bars for long-running operations
+
+**Optional (requires conda):**
+- **hdbscan** - Hierarchical DBSCAN clustering
+  ```bash
+  conda install -c conda-forge hdbscan
+  ```
 
 ## Model Evaluation Metrics
 
 **Clustering:**
 - **Silhouette Score** (0-1, higher is better): Measures cluster cohesion and separation
 - **Davies-Bouldin Index** (≥0, lower is better): Within-cluster to between-cluster distance ratio
-- **Inertia**: Within-cluster sum of squared distances
+- **Calinski-Harabasz Score** (≥0, higher is better): Ratio of between-cluster to within-cluster dispersion
+- **Inertia** (≥0, lower is better): Within-cluster sum of squared distances (K-Means only)
+
+**Forecasting:**
+- **MAE (Mean Absolute Error)** (≥0, lower is better): Average absolute difference between predicted and actual values
+- **RMSE (Root Mean Squared Error)** (≥0, lower is better): Square root of average squared differences, penalizes large errors more heavily
+- **R² (R-squared)** (-∞ to 1, higher is better): Proportion of variance explained by the model (1.0 = perfect fit, 0.0 = baseline)
+- **MAPE (Mean Absolute Percentage Error)** (≥0%, lower is better): Average percentage deviation from actual values

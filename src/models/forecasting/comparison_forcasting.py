@@ -1,5 +1,4 @@
-# compare_models_from_csvs.py
-# this script compares gru, lstm, and xgboost metrics from three csv files (arima excluded)
+# this script compares gru, lstm, srnn, xgboost and arima metrics from five csv files
 # it unifies headers and target labels, computes mse, makes per-target 2x2 plots,
 # and writes a summary csv showing which model wins each metric.
 

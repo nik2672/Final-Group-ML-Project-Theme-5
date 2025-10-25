@@ -1,5 +1,3 @@
-# src/clustering/eda_kmeans_analysis.py
-# Author: Finn Porter
 # Purpose: Exploratory K-Means clustering analysis on 5G network data (EDA stage)
 # Note: Runs K-Means for multiple k values (2–7) on a 25% random sample to generate Elbow and Silhouette plots.
 

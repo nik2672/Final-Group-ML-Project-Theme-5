@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
-# auth: nik
 # lean-ish GRU that works with the new train/test CSVs
-#Shapes cheat-sheet (super helpful)
-'''
+# Shapes cheat-sheet (super helpful)
+"""
 Before windowing:
 
 X_tr: [T_train, n_features]
@@ -21,7 +19,8 @@ out: [batch_size, lookback, hidden=48]
 
 last = out[:, -1, :]: [batch_size, 48]
 
-head(last): [batch_size, 1]'''
+head(last): [batch_size, 1]
+"""
 
 import os, math, warnings
 import numpy as np

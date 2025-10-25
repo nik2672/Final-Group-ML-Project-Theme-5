@@ -1,27 +1,3 @@
-"""
-Hyperparameter Tuning for Clustering Algorithms (IMPROVED VERSION)
-
-This script performs systematic hyperparameter optimization for multiple clustering algorithms:
-- KMeans: Tests different numbers of clusters
-- DBSCAN: Tests epsilon and min_samples combinations
-- Birch: Tests cluster counts, threshold values, AND branching_factor (NEW!)
-- OPTICS: Tests minsds_samples, max_eps, xi, AND cluster_method ('xi' vs 'dbscan') (NEW!)
-- HDBSCAN: Tests min_cluster_size and min_samples combinations
-
-Key improvements over previous version:
-- Birch now testsa branching_ffactor parameter (30, 50, 70)
-- OPTICS now tests both cluster_method options ('xi' and 'dbscan')
-- More comprehensive parameter grid (expanded from ~200 to ~400+ configurations)
-
-Evaluates each configuration using:
-- Silhouette Score (higher = better cluster separation)
-- Davies-Bouldin Index (lower -> better cluster compactness)
-- Calinski-Harabasz Score (higher - better defined clusters)
-- Combined Score (weighted average of all metrics)
-
-NOTE: Uses train data only to avoid data leakage in hyperparameter selection.
-"""
-
 from sklearn.cluster import KMeans, DBSCAN, Birch, OPTICS
 from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
 from sklearn.preprocessing import StandardScaler

@@ -1,22 +1,5 @@
 """
 Standalone Model Comparison - Train & Evaluate 5 Clustering Models
-
-This script independently trains all 5 clustering models with predefined optimal parameters
-and evaluates them on both train and test data WITHOUT requiring tuning.py results.
-
-Models:
-1. KMeans - Partition-based clustering
-2. DBSCAN - Density-based spatial clustering
-3. Birch - Hierarchical clustering with CF tree
-4. OPTICS - Density-based with reachability ordering
-5. HDBSCAN - Hierarchical density-based clustering
-
-Steps:
-1. Load and preprocess train/test data
-2. Train each model with best-known parameters
-3. Evaluate using 3 metrics (Silhouette, DBI, CH)
-4. Calculate combined scores and rankings
-5. Generate visualizations
 """
 
 import os
