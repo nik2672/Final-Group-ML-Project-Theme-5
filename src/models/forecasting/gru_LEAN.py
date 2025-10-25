@@ -1,3 +1,4 @@
+#auth: nik
 # lean-ish GRU that works with the new train/test csv
 """
 Before windowing:
