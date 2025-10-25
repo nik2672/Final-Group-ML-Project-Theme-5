@@ -1,27 +1,3 @@
-"""
-Hyperparameter Tuning for Clustering Algorithms (IMPROVED VERSION)
-
-This script performs systematic hyperparameter optimization for multiple clustering algorithms:
-- KMeans: Tests different numbers of clusters
-- DBSCAN: Tests epsilon and min_samples combinations
-- Birch: Tests cluster counts, threshold values, AND branching_factor (NEW!)
-- OPTICS: Tests min_samples, max_eps, xi, AND cluster_method ('xi' vs 'dbscan') (NEW!)
-- HDBSCAN: Tests min_cluster_size and min_samples combinations
-
-Key improvements over previous version:
-- Birch now tests branching_factor parameter (30, 50, 70)
-- OPTICS now tests both cluster_method options ('xi' and 'dbscan')
-- More comprehensive parameter grid (expanded from ~200 to ~400+ configurations)
-
-Evaluates each configuration using:
-- Silhouette Score (higher = better cluster separation)
-- Davies-Bouldin Index (lower = better cluster compactness)
-- Calinski-Harabasz Score (higher = better defined clusters)
-- Combined Score (weighted average of all metrics)
-
-NOTE: Uses TRAIN data only to avoid data leakage in hyperparameter selection.
-"""
-
 from sklearn.cluster import KMeans, DBSCAN, Birch, OPTICS
 from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
 from sklearn.preprocessing import StandardScaler
@@ -42,7 +18,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..
 output_dir = os.path.join(PROJECT_ROOT, "results", "clustering", "tuning")
 os.makedirs(output_dir, exist_ok=True)
 
-# Load dataset and perform zone-level aggregation (TRAIN ONLY - leakage-safe)
+# Load dataset aand perform zonelevel aggregation (TRAIN ONLY - leakage-safe)
 print("Loading data...")
 data_path = os.path.join(PROJECT_ROOT, "data", "features_for_clustering_train_improved.csv")
 

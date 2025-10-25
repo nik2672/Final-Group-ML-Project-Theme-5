@@ -1,4 +1,3 @@
-# nik:hdbscan 
 import os, numpy as np, pandas as pd, matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score

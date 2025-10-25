@@ -1,5 +1,3 @@
-# src/forecasting/eda_sarima_forecast.py
-# Author: Finn Porter
 # Purpose: Exploratory SARIMA forecasting on 5G network data (EDA stage)
 # Note: This script explores temporal trends and seasonality in average latency using SARIMA.
 
