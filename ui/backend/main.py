@@ -249,6 +249,47 @@ def load_and_prepare_forecasting_data(target_metric: str = "avg_latency"):
     return X_train, y_train, X_test, y_test, df_train_clean, df_test_clean
 
 
+def save_forecasting_plot(y_true, y_pred, model_name: str, target_metric: str, max_points: int = 500):
+    """Helper function to save forecasting visualization."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        # Save in results/forecasting/ subdirectory
+        results_dir = PROJECT_ROOT / 'results' / 'forecasting'
+        results_dir.mkdir(parents=True, exist_ok=True)
+        
+        plt.figure(figsize=(14, 6))
+        # Plot subset for readability
+        plot_size = min(max_points, len(y_true))
+        
+        if hasattr(y_true, 'values'):
+            y_true_plot = y_true.values[:plot_size]
+        else:
+            y_true_plot = y_true[:plot_size]
+            
+        plt.plot(y_true_plot, label='Actual', color='blue', alpha=0.7, linewidth=2)
+        plt.plot(y_pred[:plot_size], label='Predicted', color='red', linestyle='--', linewidth=2)
+        plt.title(f'{model_name.upper()} Forecast - {target_metric}', fontsize=14)
+        plt.xlabel('Time Steps')
+        plt.ylabel(target_metric)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        filename = f"{model_name}_{target_metric}.png"
+        filepath = results_dir / filename
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"Saved visualization: {filepath}")
+        return filename
+    except Exception as e:
+        print(f"Could not generate {model_name} visualization: {e}")
+        return None
+
+
 def run_kmeans(params: Dict[str, Any]) -> Dict[str, Any]:
     """Run K-Means clustering model on both train and test data."""
     import numpy as np
@@ -986,6 +1027,8 @@ def run_xgboost(params: Dict[str, Any], target_metric: str = "avg_latency") -> D
 
     # Evaluate on test data if available
     test_metrics = None
+    output_files = []
+    
     if X_test is not None and y_test is not None:
         y_test_pred = model.predict(X_test)
         test_mae = mean_absolute_error(y_test, y_test_pred)
@@ -998,13 +1041,18 @@ def run_xgboost(params: Dict[str, Any], target_metric: str = "avg_latency") -> D
             "r2": float(test_r2),
             "n_samples": len(y_test)
         }
+        
+        # Generate visualization using helper
+        filename = save_forecasting_plot(y_test, y_test_pred, "xgboost", target_metric)
+        if filename:
+            output_files.append(filename)
 
     return {
         "model": "xgboost",
         "target_metric": target_metric,
         "train_metrics": train_metrics,
         "test_metrics": test_metrics,
-        "output_files": []  # No visualization in UI mode
+        "output_files": output_files
     }
 
 
@@ -1055,6 +1103,8 @@ def run_arima(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dic
 
     # Test set evaluation
     test_metrics = None
+    output_files = []
+    
     if df_test is not None:
         df_test_clean = df_test.dropna(subset=[target_metric])
         
@@ -1082,13 +1132,18 @@ def run_arima(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dic
             "rmse": float(test_rmse),
             "n_samples": len(test_subset)
         }
+        
+        # Generate visualization
+        filename = save_forecasting_plot(test_subset, forecast, "arima", target_metric, max_points=forecast_steps)
+        if filename:
+            output_files.append(filename)
 
     return {
         "model": "arima",
         "target_metric": target_metric,
         "train_metrics": train_metrics,
         "test_metrics": test_metrics,
-        "output_files": []  # No visualization in UI mode
+        "output_files": output_files
     }
 
 
@@ -1147,6 +1202,8 @@ def run_sarima(params: Dict[str, Any], target_metric: str = "avg_latency") -> Di
 
     # Test set evaluation
     test_metrics = None
+    output_files = []
+    
     if df_test is not None:
         df_test_clean = df_test.dropna(subset=[target_metric])
         
@@ -1172,13 +1229,18 @@ def run_sarima(params: Dict[str, Any], target_metric: str = "avg_latency") -> Di
             "rmse": float(test_rmse),
             "n_samples": len(test_subset)
         }
+        
+        # Generate visualization
+        filename = save_forecasting_plot(test_subset, forecast, "sarima", target_metric, max_points=forecast_steps)
+        if filename:
+            output_files.append(filename)
 
     return {
         "model": "sarima",
         "target_metric": target_metric,
         "train_metrics": train_metrics,
         "test_metrics": test_metrics,
-        "output_files": []  # No visualization in UI mode
+        "output_files": output_files
     }
 
 
@@ -1285,6 +1347,8 @@ def run_lstm(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dict
     
     # Test predictions
     test_metrics = None
+    output_files = []
+    
     if X_test is not None and y_test is not None:
         X_test_scaled = x_scaler.transform(X_test)
         y_test_scaled = y_scaler.transform(y_test.values.reshape(-1, 1))
@@ -1305,13 +1369,18 @@ def run_lstm(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dict
             "r2": float(test_r2),
             "n_samples": len(y_test_true)
         }
+        
+        # Generate visualization
+        filename = save_forecasting_plot(y_test_true.flatten(), y_test_pred.flatten(), "lstm", target_metric)
+        if filename:
+            output_files.append(filename)
     
     return {
         "model": "lstm",
         "target_metric": target_metric,
         "train_metrics": train_metrics,
         "test_metrics": test_metrics,
-        "output_files": []  # No visualization in UI mode
+        "output_files": output_files
     }
 
 
@@ -1496,6 +1565,8 @@ def run_gru(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dict[
     
     # Test evaluation
     test_metrics = None
+    output_files = []
+    
     if X_test is not None and y_test is not None:
         X_test_scaled = scaler_X.transform(X_test).astype(np.float32)
         y_test_scaled = scaler_y.transform(y_test.values.reshape(-1, 1)).ravel().astype(np.float32)
@@ -1524,13 +1595,18 @@ def run_gru(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dict[
             "r2": float(test_r2),
             "n_samples": len(y_test_true)
         }
+        
+        # Generate visualization
+        filename = save_forecasting_plot(y_test_true, y_test_pred, "gru", target_metric)
+        if filename:
+            output_files.append(filename)
     
     return {
         "model": "gru",
         "target_metric": target_metric,
         "train_metrics": train_metrics,
         "test_metrics": test_metrics,
-        "output_files": []  # No visualization in UI mode
+        "output_files": output_files
     }
 
 
