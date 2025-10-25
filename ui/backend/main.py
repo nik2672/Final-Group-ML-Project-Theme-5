@@ -52,15 +52,18 @@ def check_data_status():
     """Check if required data files exist."""
     clustering_train_path = PROJECT_ROOT / 'data' / 'features_for_clustering_train_improved.csv'
     clustering_test_path = PROJECT_ROOT / 'data' / 'features_for_clustering_test_improved.csv'
-    forecasting_path = PROJECT_ROOT / 'data' / 'features_for_forecasting.csv'
+    forecasting_train_path = PROJECT_ROOT / 'data' / 'features_for_forecasting_train_improved.csv'
+    forecasting_test_path = PROJECT_ROOT / 'data' / 'features_for_forecasting_test_improved.csv'
 
     return {
         "clustering_train_data": clustering_train_path.exists(),
         "clustering_test_data": clustering_test_path.exists(),
-        "forecasting_data": forecasting_path.exists(),
+        "forecasting_train_data": forecasting_train_path.exists(),
+        "forecasting_test_data": forecasting_test_path.exists(),
         "clustering_train_path": str(clustering_train_path),
         "clustering_test_path": str(clustering_test_path),
-        "forecasting_path": str(forecasting_path)
+        "forecasting_train_path": str(forecasting_train_path),
+        "forecasting_test_path": str(forecasting_test_path)
     }
 
 
@@ -104,6 +107,12 @@ async def run_model(request: ModelRequest):
             result = run_xgboost(params, target_metric)
         elif model == "arima":
             result = run_arima(params, target_metric)
+        elif model == "sarima":
+            result = run_sarima(params, target_metric)
+        elif model == "lstm":
+            result = run_lstm(params, target_metric)
+        elif model == "gru":
+            result = run_gru(params, target_metric)
         else:
             raise HTTPException(status_code=400, detail=f"Unknown model: {model}")
 
@@ -191,6 +200,53 @@ def load_and_prepare_clustering_data():
         X_test_scaled = scaler.transform(X_test)
     
     return X_train, X_train_scaled, X_test, X_test_scaled, scaler
+
+
+def load_and_prepare_forecasting_data(target_metric: str = "avg_latency"):
+    """Helper function to load and prepare both train and test forecasting data."""
+    import pandas as pd
+    
+    train_path = PROJECT_ROOT / 'data' / 'features_for_forecasting_train_improved.csv'
+    test_path = PROJECT_ROOT / 'data' / 'features_for_forecasting_test_improved.csv'
+    
+    if not train_path.exists():
+        raise FileNotFoundError("Training forecasting features not found. Run feature engineering first.")
+    
+    df_train = pd.read_csv(train_path, low_memory=False)
+    df_test = pd.read_csv(test_path, low_memory=False) if test_path.exists() else None
+    
+    # Validate target column
+    if target_metric not in df_train.columns:
+        raise ValueError(f"Target metric '{target_metric}' not found in data. Available: {list(df_train.columns)}")
+    
+    # Clean data
+    df_train_clean = df_train.dropna(subset=[target_metric])
+    df_test_clean = df_test.dropna(subset=[target_metric]) if df_test is not None else None
+    
+    # Prepare features
+    exclude_cols = [target_metric, 'square_id', 'day', 'day_id']
+    feature_cols = [col for col in df_train_clean.columns if col not in exclude_cols]
+    
+    # Train data
+    X_train = df_train_clean[feature_cols].copy()
+    for col in X_train.columns:
+        if X_train[col].dtype == 'object':
+            X_train[col] = pd.Categorical(X_train[col]).codes
+    X_train = X_train.fillna(0)
+    y_train = df_train_clean[target_metric]
+    
+    # Test data
+    X_test = None
+    y_test = None
+    if df_test_clean is not None:
+        X_test = df_test_clean[feature_cols].copy()
+        for col in X_test.columns:
+            if X_test[col].dtype == 'object':
+                X_test[col] = pd.Categorical(X_test[col]).codes
+        X_test = X_test.fillna(0)
+        y_test = df_test_clean[target_metric]
+    
+    return X_train, y_train, X_test, y_test, df_train_clean, df_test_clean
 
 
 def run_kmeans(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -890,40 +946,13 @@ def run_hdbscan(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def run_xgboost(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dict[str, Any]:
-    """Run XGBoost forecasting model."""
+    """Run XGBoost forecasting model on both train and test data."""
     import numpy as np
-    import pandas as pd
-    from sklearn.model_selection import train_test_split
     from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
     from xgboost import XGBRegressor
 
     # Load data
-    data_path = PROJECT_ROOT / 'data' / 'features_for_forecasting.csv'
-    if not data_path.exists():
-        raise FileNotFoundError("Forecasting features not found. Run feature engineering first.")
-
-    df = pd.read_csv(data_path, low_memory=False)
-
-    target_col = target_metric
-    if target_col not in df.columns:
-        raise ValueError(f"Target metric '{target_col}' not found in data. Available: {list(df.columns)}")
-
-    df_clean = df.dropna(subset=[target_col])
-
-    # Prepare features
-    exclude_cols = [target_col, 'square_id', 'day', 'day_id']
-    feature_cols = [col for col in df_clean.columns if col not in exclude_cols]
-
-    X = df_clean[feature_cols].copy()
-    for col in X.columns:
-        if X[col].dtype == 'object':
-            X[col] = pd.Categorical(X[col]).codes
-    X = X.fillna(0)
-    y = df_clean[target_col]
-
-    # Train-test split
-    test_size = float(params.get('test_size', 0.2))
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+    X_train, y_train, X_test, y_test, df_train, df_test = load_and_prepare_forecasting_data(target_metric)
 
     # Train XGBoost
     n_estimators = int(params.get('n_estimators', 100))
@@ -938,91 +967,570 @@ def run_xgboost(params: Dict[str, Any], target_metric: str = "avg_latency") -> D
         n_jobs=-1,
         random_state=42
     )
-    model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
+    
+    # Train on train data
+    model.fit(X_train, y_train, verbose=False)
 
-    # Predictions
-    y_pred = model.predict(X_test)
+    # Evaluate on train data
+    y_train_pred = model.predict(X_train)
+    train_mae = mean_absolute_error(y_train, y_train_pred)
+    train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
+    train_r2 = r2_score(y_train, y_train_pred)
 
-    # Metrics
-    mae = mean_absolute_error(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    r2 = r2_score(y_test, y_pred)
+    train_metrics = {
+        "mae": float(train_mae),
+        "rmse": float(train_rmse),
+        "r2": float(train_r2),
+        "n_samples": len(y_train)
+    }
+
+    # Evaluate on test data if available
+    test_metrics = None
+    if X_test is not None and y_test is not None:
+        y_test_pred = model.predict(X_test)
+        test_mae = mean_absolute_error(y_test, y_test_pred)
+        test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
+        test_r2 = r2_score(y_test, y_test_pred)
+
+        test_metrics = {
+            "mae": float(test_mae),
+            "rmse": float(test_rmse),
+            "r2": float(test_r2),
+            "n_samples": len(y_test)
+        }
 
     return {
         "model": "xgboost",
-        "target_metric": target_col,
-        "metrics": {
-            "mae": float(mae),
-            "rmse": float(rmse),
-            "r2": float(r2)
-        },
-        "output_files": [f"xgboost_{target_col}.png", f"feature_importance_{target_col}.png"]
+        "target_metric": target_metric,
+        "train_metrics": train_metrics,
+        "test_metrics": test_metrics,
+        "output_files": []  # No visualization in UI mode
     }
 
 
 def run_arima(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dict[str, Any]:
-    """Run ARIMA forecasting model."""
+    """Run ARIMA forecasting model on both train and test data."""
     import numpy as np
-    import pandas as pd
     from sklearn.metrics import mean_absolute_error, mean_squared_error
     from statsmodels.tsa.arima.model import ARIMA
     import warnings
     warnings.filterwarnings('ignore')
 
     # Load data
-    data_path = PROJECT_ROOT / 'data' / 'features_for_forecasting.csv'
-    if not data_path.exists():
-        raise FileNotFoundError("Forecasting features not found. Run feature engineering first.")
+    _, _, _, _, df_train, df_test = load_and_prepare_forecasting_data(target_metric)
 
-    df = pd.read_csv(data_path, low_memory=False)
+    # Get time series
+    df_train_clean = df_train.dropna(subset=[target_metric])
+    
+    # Sample train data if too large
+    sample_size = int(params.get('sample_size', 20000))  # Reduced to 20K for UI
+    if len(df_train_clean) > sample_size:
+        df_train_clean = df_train_clean.sample(n=sample_size, random_state=42)
 
-    target_col = target_metric
-    if target_col not in df.columns:
-        raise ValueError(f"Target metric '{target_col}' not found in data. Available: {list(df.columns)}")
+    if 'hour' in df_train_clean.columns:
+        df_train_clean = df_train_clean.sort_values('hour')
 
-    df_clean = df.dropna(subset=[target_col])
+    ts_train = df_train_clean[target_metric].values
 
-    # Sample data
-    sample_size = int(params.get('sample_size', 50000))
-    if len(df_clean) > sample_size:
-        df_clean = df_clean.sample(n=sample_size, random_state=42)
-
-    if 'hour' in df_clean.columns:
-        df_clean = df_clean.sort_values('hour')
-
-    ts = df_clean[target_col].values
-
-    # Train ARIMA
+    # Train ARIMA on train data
     p = int(params.get('p', 2))
     d = int(params.get('d', 1))
     q = int(params.get('q', 2))
-    forecast_steps = int(params.get('forecast_steps', 50))
 
-    train_size = int(len(ts) * 0.8)
-    train_data = ts[:train_size]
-    test_data = ts[train_size:]
-
-    model = ARIMA(train_data, order=(p, d, q))
+    model = ARIMA(ts_train, order=(p, d, q))
     model_fit = model.fit()
 
-    forecast_steps = min(forecast_steps, len(test_data))
-    forecast = model_fit.forecast(steps=forecast_steps)
+    # Train set evaluation (in-sample)
+    train_pred = model_fit.fittedvalues
+    train_mae = mean_absolute_error(ts_train[d:], train_pred[d:])  # Skip first d values due to differencing
+    train_rmse = np.sqrt(mean_squared_error(ts_train[d:], train_pred[d:]))
 
-    # Metrics
-    test_subset = test_data[:forecast_steps]
-    mae = mean_absolute_error(test_subset, forecast)
-    rmse = np.sqrt(mean_squared_error(test_subset, forecast))
+    train_metrics = {
+        "mae": float(train_mae),
+        "rmse": float(train_rmse),
+        "aic": float(model_fit.aic),
+        "bic": float(model_fit.bic),
+        "n_samples": len(ts_train)
+    }
+
+    # Test set evaluation
+    test_metrics = None
+    if df_test is not None:
+        df_test_clean = df_test.dropna(subset=[target_metric])
+        
+        # Sample test data
+        if len(df_test_clean) > sample_size:
+            df_test_clean = df_test_clean.sample(n=sample_size, random_state=42)
+            
+        if 'hour' in df_test_clean.columns:
+            df_test_clean = df_test_clean.sort_values('hour')
+            
+        ts_test = df_test_clean[target_metric].values
+        
+        # Forecast on test data
+        forecast_steps = int(params.get('forecast_steps', min(100, len(ts_test))))
+        forecast_steps = min(forecast_steps, len(ts_test))
+        
+        forecast = model_fit.forecast(steps=forecast_steps)
+        test_subset = ts_test[:forecast_steps]
+        
+        test_mae = mean_absolute_error(test_subset, forecast)
+        test_rmse = np.sqrt(mean_squared_error(test_subset, forecast))
+
+        test_metrics = {
+            "mae": float(test_mae),
+            "rmse": float(test_rmse),
+            "n_samples": len(test_subset)
+        }
 
     return {
         "model": "arima",
-        "target_metric": target_col,
-        "metrics": {
-            "mae": float(mae),
-            "rmse": float(rmse),
-            "aic": float(model_fit.aic),
-            "bic": float(model_fit.bic)
-        },
-        "output_files": [f"arima_{target_col}.png"]
+        "target_metric": target_metric,
+        "train_metrics": train_metrics,
+        "test_metrics": test_metrics,
+        "output_files": []  # No visualization in UI mode
+    }
+
+
+def run_sarima(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dict[str, Any]:
+    """Run SARIMA forecasting model on both train and test data."""
+    import numpy as np
+    from sklearn.metrics import mean_absolute_error, mean_squared_error
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+    import warnings
+    warnings.filterwarnings('ignore')
+
+    # Load data
+    _, _, _, _, df_train, df_test = load_and_prepare_forecasting_data(target_metric)
+
+    # Get time series
+    df_train_clean = df_train.dropna(subset=[target_metric])
+    
+    # Sample train data if too large
+    sample_size = int(params.get('sample_size', 20000))  # Reduced to 20K for UI
+    if len(df_train_clean) > sample_size:
+        df_train_clean = df_train_clean.sample(n=sample_size, random_state=42)
+
+    if 'hour' in df_train_clean.columns:
+        df_train_clean = df_train_clean.sort_values('hour')
+
+    ts_train = df_train_clean[target_metric].values
+
+    # Train SARIMA on train data
+    p = int(params.get('p', 1))
+    d = int(params.get('d', 1))
+    q = int(params.get('q', 1))
+    seasonal_p = int(params.get('seasonal_p', 1))
+    seasonal_d = int(params.get('seasonal_d', 1))
+    seasonal_q = int(params.get('seasonal_q', 1))
+    seasonal_period = int(params.get('seasonal_period', 24))
+
+    model = SARIMAX(
+        ts_train, 
+        order=(p, d, q), 
+        seasonal_order=(seasonal_p, seasonal_d, seasonal_q, seasonal_period)
+    )
+    model_fit = model.fit(disp=False)
+
+    # Train set evaluation (in-sample)
+    train_pred = model_fit.fittedvalues
+    train_mae = mean_absolute_error(ts_train[d:], train_pred[d:])
+    train_rmse = np.sqrt(mean_squared_error(ts_train[d:], train_pred[d:]))
+
+    train_metrics = {
+        "mae": float(train_mae),
+        "rmse": float(train_rmse),
+        "aic": float(model_fit.aic),
+        "bic": float(model_fit.bic),
+        "n_samples": len(ts_train)
+    }
+
+    # Test set evaluation
+    test_metrics = None
+    if df_test is not None:
+        df_test_clean = df_test.dropna(subset=[target_metric])
+        
+        if len(df_test_clean) > sample_size:
+            df_test_clean = df_test_clean.sample(n=sample_size, random_state=42)
+            
+        if 'hour' in df_test_clean.columns:
+            df_test_clean = df_test_clean.sort_values('hour')
+            
+        ts_test = df_test_clean[target_metric].values
+        
+        forecast_steps = int(params.get('forecast_steps', min(100, len(ts_test))))
+        forecast_steps = min(forecast_steps, len(ts_test))
+        
+        forecast = model_fit.forecast(steps=forecast_steps)
+        test_subset = ts_test[:forecast_steps]
+        
+        test_mae = mean_absolute_error(test_subset, forecast)
+        test_rmse = np.sqrt(mean_squared_error(test_subset, forecast))
+
+        test_metrics = {
+            "mae": float(test_mae),
+            "rmse": float(test_rmse),
+            "n_samples": len(test_subset)
+        }
+
+    return {
+        "model": "sarima",
+        "target_metric": target_metric,
+        "train_metrics": train_metrics,
+        "test_metrics": test_metrics,
+        "output_files": []  # No visualization in UI mode
+    }
+
+
+def run_lstm(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dict[str, Any]:
+    """Run LSTM forecasting model on both train and test data (optimized version)."""
+    import numpy as np
+    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+    from sklearn.preprocessing import MinMaxScaler
+    
+    try:
+        from tensorflow.keras.models import Sequential
+        from tensorflow.keras.layers import LSTM, Dense, Dropout
+        from tensorflow.keras.callbacks import EarlyStopping
+        import tensorflow as tf
+        tf.get_logger().setLevel('ERROR')
+    except ImportError:
+        return {
+            "status": "error",
+            "model": "lstm",
+            "message": "TensorFlow/Keras not installed. Install with: pip install tensorflow"
+        }
+
+    # Load data
+    X_train, y_train, X_test, y_test, _, _ = load_and_prepare_forecasting_data(target_metric)
+
+    # Sample data if too large (UI optimized: 100K max)
+    max_samples = int(params.get('max_samples', 100000))
+    if len(X_train) > max_samples:
+        print(f"Sampling first {max_samples:,} sequential rows from {len(X_train):,}")
+        X_train = X_train.iloc[:max_samples]
+        y_train = y_train.iloc[:max_samples]
+
+    # Scale features and target
+    x_scaler = MinMaxScaler()
+    y_scaler = MinMaxScaler()
+    
+    X_train_scaled = x_scaler.fit_transform(X_train)
+    y_train_scaled = y_scaler.fit_transform(y_train.values.reshape(-1, 1))
+    
+    # Create sequences
+    lookback = int(params.get('lookback', 5))
+    
+    def make_sequences(X, y, lookback):
+        X_seq, y_seq = [], []
+        for i in range(lookback, len(X)):
+            X_seq.append(X[i - lookback:i])
+            y_seq.append(y[i])
+        return np.array(X_seq), np.array(y_seq)
+    
+    X_train_seq, y_train_seq = make_sequences(X_train_scaled, y_train_scaled, lookback)
+    
+    # Build LSTM model (matches actual implementation)
+    units = int(params.get('units', 64))
+    dropout = float(params.get('dropout', 0.2))
+    epochs = int(params.get('epochs', 10))  # Reduced to 10 for UI
+    batch_size = int(params.get('batch_size', 64))
+    
+    model = Sequential([
+        LSTM(units, return_sequences=True, input_shape=(X_train_seq.shape[1], X_train_seq.shape[2])),
+        Dropout(dropout),
+        LSTM(units, return_sequences=False),
+        Dropout(dropout),
+        Dense(32, activation='relu'),
+        Dense(1)
+    ])
+    
+    model.compile(optimizer='adam', loss='mse')
+    
+    # Create validation split for early stopping
+    val_split = 0.15
+    val_size = int(len(X_train_seq) * val_split)
+    X_val = X_train_seq[-val_size:]
+    y_val = y_train_seq[-val_size:]
+    X_train_fit = X_train_seq[:-val_size]
+    y_train_fit = y_train_seq[:-val_size]
+    
+    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    
+    print(f"\nTraining LSTM: {epochs} epochs, {len(X_train_fit):,} train samples, {len(X_val):,} val samples")
+    model.fit(
+        X_train_fit, y_train_fit,
+        validation_data=(X_val, y_val),
+        epochs=epochs,
+        batch_size=batch_size,
+        verbose=0,
+        callbacks=[early_stop]
+    )
+    
+    # Train predictions (on full training set)
+    y_train_pred_scaled = model.predict(X_train_seq, verbose=0)
+    y_train_pred = y_scaler.inverse_transform(y_train_pred_scaled)
+    y_train_true = y_scaler.inverse_transform(y_train_seq)
+    
+    train_mae = mean_absolute_error(y_train_true, y_train_pred)
+    train_rmse = np.sqrt(mean_squared_error(y_train_true, y_train_pred))
+    train_r2 = r2_score(y_train_true, y_train_pred)
+    
+    train_metrics = {
+        "mae": float(train_mae),
+        "rmse": float(train_rmse),
+        "r2": float(train_r2),
+        "n_samples": len(y_train_true)
+    }
+    
+    # Test predictions
+    test_metrics = None
+    if X_test is not None and y_test is not None:
+        X_test_scaled = x_scaler.transform(X_test)
+        y_test_scaled = y_scaler.transform(y_test.values.reshape(-1, 1))
+        
+        X_test_seq, y_test_seq = make_sequences(X_test_scaled, y_test_scaled, lookback)
+        
+        y_test_pred_scaled = model.predict(X_test_seq, verbose=0)
+        y_test_pred = y_scaler.inverse_transform(y_test_pred_scaled)
+        y_test_true = y_scaler.inverse_transform(y_test_seq)
+        
+        test_mae = mean_absolute_error(y_test_true, y_test_pred)
+        test_rmse = np.sqrt(mean_squared_error(y_test_true, y_test_pred))
+        test_r2 = r2_score(y_test_true, y_test_pred)
+        
+        test_metrics = {
+            "mae": float(test_mae),
+            "rmse": float(test_rmse),
+            "r2": float(test_r2),
+            "n_samples": len(y_test_true)
+        }
+    
+    return {
+        "model": "lstm",
+        "target_metric": target_metric,
+        "train_metrics": train_metrics,
+        "test_metrics": test_metrics,
+        "output_files": []  # No visualization in UI mode
+    }
+
+
+def run_gru(params: Dict[str, Any], target_metric: str = "avg_latency") -> Dict[str, Any]:
+    """Run GRU forecasting model on both train and test data (optimized version)."""
+    import numpy as np
+    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+    from sklearn.preprocessing import StandardScaler, MinMaxScaler
+    
+    try:
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import Dataset, DataLoader
+    except ImportError:
+        return {
+            "status": "error",
+            "model": "gru",
+            "message": "PyTorch not installed. Install with: pip install torch"
+        }
+
+    # Load data
+    X_train, y_train, X_test, y_test, _, _ = load_and_prepare_forecasting_data(target_metric)
+
+    # AGGRESSIVE SAMPLING FOR UI - Max 50K rows
+    max_samples = int(params.get('max_samples', 50000))
+    if len(X_train) > max_samples:
+        print(f"Sampling first {max_samples:,} sequential rows from {len(X_train):,}")
+        X_train = X_train.iloc[:max_samples]
+        y_train = y_train.iloc[:max_samples]
+
+    # Feature selection - limit to max 16 most important features
+    max_features = int(params.get('max_features', 16))
+    if X_train.shape[1] > max_features:
+        # Use variance-based feature selection
+        variances = X_train.var()
+        top_features = variances.nlargest(max_features).index
+        X_train = X_train[top_features]
+        X_test = X_test[top_features] if X_test is not None else None
+
+    # Scale features and target separately
+    scaler_X = StandardScaler()
+    scaler_y = MinMaxScaler()
+    
+    X_train_scaled = scaler_X.fit_transform(X_train).astype(np.float32)
+    y_train_scaled = scaler_y.fit_transform(y_train.values.reshape(-1, 1)).ravel().astype(np.float32)
+    
+    # Validation split (15% of training data)
+    n_val = int(0.15 * len(X_train_scaled))
+    X_val = X_train_scaled[-n_val:]
+    y_val = y_train_scaled[-n_val:]
+    X_train_scaled = X_train_scaled[:-n_val]
+    y_train_scaled = y_train_scaled[:-n_val]
+    
+    # Parameters
+    lookback = int(params.get('lookback', 16))  # Reduced from 32 to 16 for UI
+    hidden_size = int(params.get('hidden_size', 48))
+    epochs = int(params.get('epochs', 10))  # Reduced to 10 for UI
+    batch_size = int(params.get('batch_size', 64))
+    learning_rate = float(params.get('learning_rate', 0.001))
+    dropout = float(params.get('dropout', 0.1))
+    
+    # Windowing Dataset
+    class WindowDataset(Dataset):
+        def __init__(self, X, y, lookback):
+            self.X = X
+            self.y = y.reshape(-1, 1)
+            self.lookback = lookback
+            
+        def __len__(self):
+            return max(0, len(self.X) - self.lookback)
+        
+        def __getitem__(self, i):
+            j = i + self.lookback
+            xw = self.X[j-self.lookback:j]
+            return torch.from_numpy(xw), torch.from_numpy(self.y[j])
+    
+    # Create datasets and loaders
+    train_ds = WindowDataset(X_train_scaled, y_train_scaled, lookback)
+    val_ds = WindowDataset(X_val, y_val, lookback)
+    
+    if len(train_ds) == 0:
+        return {
+            "status": "error",
+            "model": "gru",
+            "message": f"Not enough samples after windowing. Reduce lookback from {lookback}"
+        }
+    
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+    
+    # GRU Model (matches your implementation)
+    class GRUModel(nn.Module):
+        def __init__(self, n_features, hidden_size, dropout):
+            super(GRUModel, self).__init__()
+            self.gru = nn.GRU(n_features, hidden_size, batch_first=True)
+            self.head = nn.Sequential(
+                nn.Linear(hidden_size, 64),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(64, 1)
+            )
+            
+        def forward(self, x):
+            out, _ = self.gru(x)
+            last = out[:, -1, :]  # Take last timestep
+            return self.head(last)
+    
+    # Train model
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = GRUModel(X_train.shape[1], hidden_size, dropout).to(device)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    
+    best_val_loss = float('inf')
+    best_state = None
+    
+    print(f"\nTraining GRU: {epochs} epochs, {len(train_ds)} train samples, {len(val_ds)} val samples")
+    
+    for epoch in range(epochs):
+        # Training
+        model.train()
+        train_loss = 0
+        for xb, yb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            optimizer.zero_grad()
+            pred = model(xb)
+            loss = criterion(pred, yb)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item() * len(xb)
+        train_loss /= len(train_ds)
+        
+        # Validation
+        model.eval()
+        val_loss = 0
+        with torch.no_grad():
+            for xb, yb in val_loader:
+                xb, yb = xb.to(device), yb.to(device)
+                pred = model(xb)
+                val_loss += criterion(pred, yb).item() * len(xb)
+        val_loss /= len(val_ds)
+        
+        # Save best model
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+        
+        if (epoch + 1) % 5 == 0:
+            print(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.5f}, Val Loss: {val_loss:.5f}")
+    
+    # Restore best model
+    if best_state is not None:
+        model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
+    
+    # Evaluate on training set (full)
+    model.eval()
+    full_train_ds = WindowDataset(scaler_X.transform(X_train).astype(np.float32),
+                                   scaler_y.transform(y_train.values.reshape(-1, 1)).ravel().astype(np.float32),
+                                   lookback)
+    train_preds, train_trues = [], []
+    with torch.no_grad():
+        for xb, yb in DataLoader(full_train_ds, batch_size=batch_size):
+            xb = xb.to(device)
+            train_preds.append(model(xb).cpu().numpy())
+            train_trues.append(yb.numpy())
+    
+    y_train_pred_scaled = np.vstack(train_preds).ravel()
+    y_train_true_scaled = np.vstack(train_trues).ravel()
+    y_train_pred = scaler_y.inverse_transform(y_train_pred_scaled.reshape(-1, 1)).ravel()
+    y_train_true = scaler_y.inverse_transform(y_train_true_scaled.reshape(-1, 1)).ravel()
+    
+    train_mae = mean_absolute_error(y_train_true, y_train_pred)
+    train_rmse = np.sqrt(mean_squared_error(y_train_true, y_train_pred))
+    train_r2 = r2_score(y_train_true, y_train_pred)
+    
+    train_metrics = {
+        "mae": float(train_mae),
+        "rmse": float(train_rmse),
+        "r2": float(train_r2),
+        "n_samples": len(y_train_true)
+    }
+    
+    # Test evaluation
+    test_metrics = None
+    if X_test is not None and y_test is not None:
+        X_test_scaled = scaler_X.transform(X_test).astype(np.float32)
+        y_test_scaled = scaler_y.transform(y_test.values.reshape(-1, 1)).ravel().astype(np.float32)
+        
+        test_ds = WindowDataset(X_test_scaled, y_test_scaled, lookback)
+        test_preds, test_trues = [], []
+        
+        with torch.no_grad():
+            for xb, yb in DataLoader(test_ds, batch_size=batch_size):
+                xb = xb.to(device)
+                test_preds.append(model(xb).cpu().numpy())
+                test_trues.append(yb.numpy())
+        
+        y_test_pred_scaled = np.vstack(test_preds).ravel()
+        y_test_true_scaled = np.vstack(test_trues).ravel()
+        y_test_pred = scaler_y.inverse_transform(y_test_pred_scaled.reshape(-1, 1)).ravel()
+        y_test_true = scaler_y.inverse_transform(y_test_true_scaled.reshape(-1, 1)).ravel()
+        
+        test_mae = mean_absolute_error(y_test_true, y_test_pred)
+        test_rmse = np.sqrt(mean_squared_error(y_test_true, y_test_pred))
+        test_r2 = r2_score(y_test_true, y_test_pred)
+        
+        test_metrics = {
+            "mae": float(test_mae),
+            "rmse": float(test_rmse),
+            "r2": float(test_r2),
+            "n_samples": len(y_test_true)
+        }
+    
+    return {
+        "model": "gru",
+        "target_metric": target_metric,
+        "train_metrics": train_metrics,
+        "test_metrics": test_metrics,
+        "output_files": []  # No visualization in UI mode
     }
 
 

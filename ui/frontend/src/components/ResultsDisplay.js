@@ -152,7 +152,14 @@ function ResultsDisplay({ results, model }) {
   };
 
   const renderForecastingResults = () => {
-    if (!results.metrics) return null;
+    // Support both old format (results.metrics) and new format (train_metrics/test_metrics)
+    const trainMetrics = results.train_metrics || results.metrics;
+    const testMetrics = results.test_metrics;
+
+    if (!trainMetrics) return null;
+
+    // Check for overfitting
+    const hasOverfitting = testMetrics && trainMetrics.mae && testMetrics.mae > trainMetrics.mae * 1.5;
 
     return (
       <Box>
@@ -161,46 +168,61 @@ function ResultsDisplay({ results, model }) {
           Forecasting Results
         </Typography>
 
-        <Grid container spacing={3} sx={{ mt: 2 }}>
-          {results.metrics.mae !== undefined && (
-            <Grid item xs={12} sm={4}>
+        {hasOverfitting && (
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            ⚠️ Potential overfitting detected: Test error is significantly higher than train error
+          </Alert>
+        )}
+
+        {/* Train Metrics */}
+        <Typography variant="h6" sx={{ mt: 3, mb: 2 }}>
+          Training Performance
+        </Typography>
+        <Grid container spacing={3}>
+          {trainMetrics.mae !== undefined && (
+            <Grid item xs={12} sm={3}>
               <Card elevation={2}>
                 <CardContent>
                   <Typography color="text.secondary" gutterBottom>
-                    Mean Absolute Error
+                    MAE (Train)
                   </Typography>
-                  <Typography variant="h4">
-                    {results.metrics.mae.toFixed(3)}
+                  <Typography variant="h5">
+                    {trainMetrics.mae.toFixed(3)}
+                  </Typography>
+                  {trainMetrics.n_samples && (
+                    <Typography variant="caption" color="text.secondary">
+                      n={trainMetrics.n_samples.toLocaleString()}
+                    </Typography>
+                  )}
+                </CardContent>
+              </Card>
+            </Grid>
+          )}
+
+          {trainMetrics.rmse !== undefined && (
+            <Grid item xs={12} sm={3}>
+              <Card elevation={2}>
+                <CardContent>
+                  <Typography color="text.secondary" gutterBottom>
+                    RMSE (Train)
+                  </Typography>
+                  <Typography variant="h5">
+                    {trainMetrics.rmse.toFixed(3)}
                   </Typography>
                 </CardContent>
               </Card>
             </Grid>
           )}
 
-          {results.metrics.rmse !== undefined && (
-            <Grid item xs={12} sm={4}>
+          {trainMetrics.r2 !== undefined && (
+            <Grid item xs={12} sm={3}>
               <Card elevation={2}>
                 <CardContent>
                   <Typography color="text.secondary" gutterBottom>
-                    Root Mean Squared Error
+                    R² Score (Train)
                   </Typography>
-                  <Typography variant="h4">
-                    {results.metrics.rmse.toFixed(3)}
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-          )}
-
-          {results.metrics.r2 !== undefined && (
-            <Grid item xs={12} sm={4}>
-              <Card elevation={2}>
-                <CardContent>
-                  <Typography color="text.secondary" gutterBottom>
-                    R² Score
-                  </Typography>
-                  <Typography variant="h4">
-                    {results.metrics.r2.toFixed(3)}
+                  <Typography variant="h5">
+                    {trainMetrics.r2.toFixed(3)}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     Closer to 1 is better
@@ -209,7 +231,88 @@ function ResultsDisplay({ results, model }) {
               </Card>
             </Grid>
           )}
+
+          {trainMetrics.aic !== undefined && (
+            <Grid item xs={12} sm={3}>
+              <Card elevation={2}>
+                <CardContent>
+                  <Typography color="text.secondary" gutterBottom>
+                    AIC (Train)
+                  </Typography>
+                  <Typography variant="h5">
+                    {trainMetrics.aic.toFixed(1)}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Lower is better
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          )}
         </Grid>
+
+        {/* Test Metrics */}
+        {testMetrics && (
+          <>
+            <Typography variant="h6" sx={{ mt: 4, mb: 2 }}>
+              Test Performance
+            </Typography>
+            <Grid container spacing={3}>
+              {testMetrics.mae !== undefined && (
+                <Grid item xs={12} sm={3}>
+                  <Card elevation={2} sx={{ bgcolor: hasOverfitting ? '#fff3e0' : 'inherit' }}>
+                    <CardContent>
+                      <Typography color="text.secondary" gutterBottom>
+                        MAE (Test)
+                      </Typography>
+                      <Typography variant="h5" color={hasOverfitting ? 'warning.main' : 'inherit'}>
+                        {testMetrics.mae.toFixed(3)}
+                      </Typography>
+                      {testMetrics.n_samples && (
+                        <Typography variant="caption" color="text.secondary">
+                          n={testMetrics.n_samples.toLocaleString()}
+                        </Typography>
+                      )}
+                    </CardContent>
+                  </Card>
+                </Grid>
+              )}
+
+              {testMetrics.rmse !== undefined && (
+                <Grid item xs={12} sm={3}>
+                  <Card elevation={2}>
+                    <CardContent>
+                      <Typography color="text.secondary" gutterBottom>
+                        RMSE (Test)
+                      </Typography>
+                      <Typography variant="h5">
+                        {testMetrics.rmse.toFixed(3)}
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              )}
+
+              {testMetrics.r2 !== undefined && (
+                <Grid item xs={12} sm={3}>
+                  <Card elevation={2}>
+                    <CardContent>
+                      <Typography color="text.secondary" gutterBottom>
+                        R² Score (Test)
+                      </Typography>
+                      <Typography variant="h5">
+                        {testMetrics.r2.toFixed(3)}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Closer to 1 is better
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              )}
+            </Grid>
+          </>
+        )}
 
         {results.output_files && results.output_files.length > 0 && (
           <Box sx={{ mt: 4 }}>

@@ -41,7 +41,8 @@ function DataStatusIndicator() {
   if (!status) return null;
 
   const clusteringReady = status.clustering_train_data && status.clustering_test_data;
-  const allReady = clusteringReady && status.forecasting_data;
+  const forecastingReady = status.forecasting_train_data && status.forecasting_test_data;
+  const allReady = clusteringReady && forecastingReady;
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -50,7 +51,7 @@ function DataStatusIndicator() {
           <AlertTitle>Data Files Ready</AlertTitle>
           <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
             <Chip label="Clustering (Train/Test) ✓" size="small" color="success" variant="outlined" />
-            <Chip label="Forecasting ✓" size="small" color="success" variant="outlined" />
+            <Chip label="Forecasting (Train/Test) ✓" size="small" color="success" variant="outlined" />
           </Box>
         </Alert>
       ) : (
@@ -59,7 +60,7 @@ function DataStatusIndicator() {
           Please run feature engineering first: <code>python src/features/leakage_safe_feature_engineering.py</code>
           <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
             {!clusteringReady && <Chip label="Clustering (Train/Test) ✗" size="small" color="error" variant="outlined" />}
-            {!status.forecasting_data && <Chip label="Forecasting ✗" size="small" color="error" variant="outlined" />}
+            {!forecastingReady && <Chip label="Forecasting (Train/Test) ✗" size="small" color="error" variant="outlined" />}
           </Box>
         </Alert>
       )}

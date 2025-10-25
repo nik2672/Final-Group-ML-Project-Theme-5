@@ -43,8 +43,11 @@ function App() {
       'birch': { max_clusters: 7, threshold: 0.3, branching_factor: 50 },
       'optics': { min_samples: 5, max_eps: 2.0, xi: 0.1 },
       'hdbscan': { min_cluster_size: 8, min_samples: 5 },
-      'xgboost': { n_estimators: 100, learning_rate: 0.1, max_depth: 6, test_size: 0.2 },
-      'arima': { p: 2, d: 1, q: 2, sample_size: 50000, forecast_steps: 50 },
+      'xgboost': { n_estimators: 100, learning_rate: 0.1, max_depth: 6 },
+      'arima': { p: 2, d: 1, q: 2, sample_size: 20000, forecast_steps: 50 },
+      'sarima': { p: 1, d: 1, q: 1, seasonal_p: 1, seasonal_d: 1, seasonal_q: 1, seasonal_period: 24, sample_size: 20000, forecast_steps: 50 },
+      'lstm': { units: 64, dropout: 0.2, lookback: 5, epochs: 10, batch_size: 64, max_samples: 100000 },
+      'gru': { hidden_size: 48, lookback: 16, dropout: 0.1, epochs: 10, batch_size: 64, learning_rate: 0.001, max_features: 16, max_samples: 50000 },
     };
     return defaults[model] || {};
   };
@@ -86,7 +89,7 @@ function App() {
     alert('Comparison feature: Compare the metrics across your runs in the history table!');
   };
 
-  const isForecastingModel = selectedModel === 'xgboost' || selectedModel === 'arima';
+  const isForecastingModel = ['xgboost', 'arima', 'sarima', 'lstm', 'gru'].includes(selectedModel);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
