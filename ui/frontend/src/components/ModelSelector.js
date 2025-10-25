@@ -52,6 +52,24 @@ const models = [
     category: 'Forecasting',
     description: 'Time series forecasting using statistical methods',
   },
+  {
+    value: 'sarima',
+    label: 'SARIMA Forecasting',
+    category: 'Forecasting',
+    description: 'Seasonal ARIMA for capturing periodic patterns',
+  },
+  {
+    value: 'lstm',
+    label: 'LSTM Forecasting',
+    category: 'Forecasting',
+    description: 'Long Short-Term Memory neural network for sequences',
+  },
+  {
+    value: 'gru',
+    label: 'GRU Forecasting',
+    category: 'Forecasting',
+    description: 'Gated Recurrent Unit for efficient sequence modeling',
+  },
 ];
 
 function ModelSelector({ selectedModel, onModelChange }) {

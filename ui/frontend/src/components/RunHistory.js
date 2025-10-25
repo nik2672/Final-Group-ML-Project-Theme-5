@@ -25,8 +25,14 @@ function RunHistory({ history, onClear, onCompare }) {
     const colors = {
       kmeans: 'primary',
       dbscan: 'secondary',
+      birch: 'info',
+      optics: 'warning',
+      hdbscan: 'error',
       xgboost: 'success',
       arima: 'warning',
+      sarima: 'info',
+      lstm: 'secondary',
+      gru: 'primary',
     };
     return colors[model] || 'default';
   };
