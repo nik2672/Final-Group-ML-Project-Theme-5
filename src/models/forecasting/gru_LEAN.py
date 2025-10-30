@@ -1,26 +1,6 @@
 #auth: nik
 # lean-ish GRU that works with the new train/test csv
-"""
-Before windowing:
 
-X_tr: [T_train, n_features]
-
-y_tr: [T_train] (after scaling, 1D)
-
-After windowing in a batch:
-
-xb: [batch_size, lookback=32, n_features] (float32, on device)
-
-yb: [batch_size, 1] (float32, on device)
-
-GRU output:
-
-out: [batch_size, lookback, hidden=48]
-
-last = out[:, -1, :]: [batch_size, 48]
-
-head(last): [batch_size, 1]
-"""
 
 import os, math, warnings
 import numpy as np
@@ -68,7 +48,7 @@ use_only_kpis = False
 max_features  = 16#MAX FEATUERS 
 
 # utils- FEATURE PCIKIGN, CLEARS UP MESSY NAMES ADN  
-def _norm_names(df: pd.DataFrame) -> pd.DataFrame:#LOWER CASE HEADERS aliases messy anmes ot clea one 
+def _norm_names(df: pd.DataFrame) -> pd.DataFrame:#LOWER CASE HEADERS aliases messy anmes ot clea ones| nnames on left rename to on the right 
     m = {c: c.lower() for c in df.columns}
     df = df.rename(columns=m)
     ren = {
@@ -89,83 +69,88 @@ def _norm_names(df: pd.DataFrame) -> pd.DataFrame:#LOWER CASE HEADERS aliases me
             df = df.rename(columns={k: v})
     return df
 
-def _pick_kpis(df: pd.DataFrame):#returns [avg_latency, upload_bitrate, dowload_bitrate]
+def _pick_kpis(df: pd.DataFrame):#returns [avg_latency, upload_bitrate, dowload_bitrate]- these are kPI identifed in the dataframe 
     return [c for c in ["avg_latency","upload_bitrate","download_bitrate"] if c in df.columns]
 
-def _select_feats(df: pd.DataFrame, target: str):#takes all numeric columsn except teh target optionally resitricts to kpis + lag 1 when and caps max features 
-    num = df.select_dtypes(include=[np.number]).columns.tolist()
+def _select_feats(df: pd.DataFrame, target: str):
+    num = df.select_dtypes(include=[np.number]).columns.tolist()#takes all numeric column names| text date columsn ingored 
     feats = [c for c in num if c != target]
-    if use_only_kpis:
-        kpi = _pick_kpis(df)
+    if use_only_kpis:#drop the target so it doesnt leak the label into inputs 
+        kpi = _pick_kpis(df)#keep only kpi bases (avg_latency, upload_bitrate, download_bitrate )
         feats = [c for c in feats if c in kpi or c.endswith("_lag1")] or kpi
-    if max_features and len(feats) > max_features:
+    if max_features and len(feats) > max_features:#MAX FEATURES set to 16 hence keep to max features only 16 features 
         feats = feats[:max_features]
     return feats
 
-def _downcast(df: pd.DataFrame, cols):# coorces selected columsn to a float 32 
+def _downcast(df: pd.DataFrame, cols):# turn the columns into numbers - non numeric or unparasabe entires become NaN 
     for c in cols:
-        df[c] = pd.to_numeric(df[c], errors="coerce").astype(np.float32)
+        df[c] = pd.to_numeric(df[c], errors="coerce").astype(np.float32)#down case numeric data to float32 isntead fo 64 which will halves memory 
     return df
 
 # dataset
+#turns a logn tiem series into overlapping windows of length w (lookback) for each window x[i : i + 2] te allnel is the next point y[i+w] so the model learns " given the last w steps, predict the next step "
 class WinDS(Dataset):#stores c,y arrays plsu w = lookback, len : number of pssible windows = (len (x) - w)| _getitem_(i) returns the window X[i; i+ w] and the target at tiem i+w (ie predict next step )
-    def __init__(self, X, y, w):
+    def __init__(self, X, y, w):#w = lookback 
         self.X = X
         self.y = y.reshape(-1,1)
         self.w = w
-    def __len__(self): 
+    def __len__(self): #number of windws to slide over. | ex t=100 and w=32 you get 100-32 training samples 
         return max(0, len(self.X) - self.w)
-    def __getitem__(self, i):
-        j = i + self.w
-        xw = self.X[j-self.w:j]
+    def __getitem__(self, i):#for index i build a window fo previous w rows and pairs it with the next point 
+        j = i + self.w#compute ('next' index after a window of size w)
+        xw = self.X[j-self.w:j]#the last w rows ending at j-1
         return torch.from_numpy(xw), torch.from_numpy(self.y[j])
-
+#expalple (w=3 ) | i = 0 -> window = X[0;3] (rows 0,1,2), label = y[3] | i = 1 -> window = X[1:4] (rows 1,2,3), label = y[4]
 def _make_loaders_from_arrays(X_tr, y_tr, X_te, y_te):#uses the 15% train as validation | wraps each split in windDS to get windows of length lookback = 32 | builds DataLoaders (no shuffle -> preserves order) | whyy no shuffle to keep order to avoid leaking the futrue into teh past 
     n = len(X_tr)
-    n_va = int(0.15 * n)
+    n_va = int(0.15 * n)#uses 15% fo trainign period as validation to mimic future data | keeps tmeroral order (no random split )
     X_va, y_va = X_tr[-n_va:], y_tr[-n_va:]
     X_tr, y_tr = X_tr[:-n_va], y_tr[:-n_va]
 
-    ds_tr = WinDS(X_tr, y_tr, lookback)
+    ds_tr = WinDS(X_tr, y_tr, lookback)#turns squences int overlaping windows of length lookback (e.g 32) with the next point as the label 
     ds_va = WinDS(X_va, y_va, lookback)
     ds_te = WinDS(X_te, y_te, lookback)
 
     if min(len(ds_tr), len(ds_va), len(ds_te)) == 0:
-        raise ValueError("not enough rows after windowing. reduce lookback maybe.")
+        raise ValueError("not enough rows after windowing. reduce lookback maybe.")#if squence is too short for lookback; fail early with error 
 
-    batch = min(batch0, max(16, len(ds_tr)//100))
-    pin = torch.cuda.is_available()
+    batch = min(batch0, max(16, len(ds_tr)//100))#lower bound 16, scaled with daaset size, but capped at batch 0 (e.g 128 )
+    pin = torch.cuda.is_available()#if gpu is there pseed up cpu -> gpu moves 
 
     ld_tr = DataLoader(ds_tr, batch_size=batch, shuffle=False, num_workers=num_workers, pin_memory=pin)
     ld_va = DataLoader(ds_va, batch_size=batch, shuffle=False, num_workers=num_workers, pin_memory=pin)
     ld_te = DataLoader(ds_te, batch_size=batch, shuffle=False, num_workers=num_workers, pin_memory=pin)
-    return ld_tr, ld_va, ld_te
+    return ld_tr, ld_va, ld_te#shuffle=false prevent leaking into past prevent shuffling 
 
 # model
 #GRU: a recurrrent layer with gates tha tlearn what ot keep/forget from recent timesteps 
-#MLP head: small fully ocnnnected network tha tmaps the GRU last hidden state ot the target 
+#MLP head: small fully ocnnnected network tha tmaps the GRU last hidden state ot the target
 class GRUReg(nn.Module):#gru process teh 32 x n_feature sequence and outputs a vector per time step- it takes the last tiem step (ut [:, -1, :]) -> feed into a small MLP head -> one scalar: 
+    #reads a window of shape [batch 32, n_features] -> GRU encodes teh sequence into hidden states -> take the last time step (summary of thewindow) -> small MLP head turns into one scalar prediction (the next value)
     def __init__(self, n_features, hidden=hidden, n_layers=n_layers, dropout=dropout):
         super().__init__()
         self.gru = nn.GRU(
-            input_size=n_features,
-            hidden_size=hidden,
-            num_layers=n_layers,
-            batch_first=True,
-            dropout=dropout if n_layers > 1 else 0.0,
+            input_size=n_features,#how many features per time step 
+            hidden_size=hidden,#size of GRU (e.g 48) 
+            num_layers=n_layers,#stack depth (1 here)
+            batch_first=True,#x is [batch, seq, feat]
+            dropout=dropout if n_layers > 1 else 0.0,#Gru own drop out layer only if layers are more than 1 whcih they arnt 
+        )#out shape [batch, seq_len, hidden]
+        self.head = nn.Sequential(#MLP HEAD (MULTI LAYER PERCEPTION - FEED FORWARD NEURAL NETWORK - STACKED LINEAR (DENSE) LAYERS TAKES MULTIPLE INPUTS AND THEN OOUTPUTS THE PREDICTION 
+            nn.Linear(hidden, 64),#dense layer (compress/expand features )
+            nn.ReLU(),#nonlinearity: helps modle learn the curves not just linesidentify complex reationships 
+            nn.Dropout(dropout),#regularization: randomly zeros units to reduce overfitting 
+            nn.Linear(64, 1),#final dense: map to one scalar (the prediction) [the next value fo the target]
         )
-        self.head = nn.Sequential(
-            nn.Linear(hidden, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, 1),
-        )
-    def forward(self, x):
-        out, _ = self.gru(x)
-        last = out[:, -1, :]
-        return self.head(last)
+    def forward(self, x):#run sequence throguh gru 
+        out, _ = self.gru(x)#take the GRU output at the last time step out has shape [batch, seq_len, n_feature] - | n_features -> is the number of of input clumsn (16) FEATS are hte list of input columns deied to use after filtering 
+        last = out[:, -1, :]#pass the vector thoguht eh MLP head last = out [:, -1,:]
+        return self.head(last)#[batch, hidden] -> [batch, 1 ]
 
 # data loading for the new split
+#1. prefer both trian_csv and test_csv, clean columsn with _norm_names()
+#2.if csv missing raise erorr |if exists read and normalize column nmaes | if theres a 'time' column convert it to a proper timestamp - drop invalid orws, sort by time, and resset index | PRESENRVES TEMPORAL ORDER FOR A PROPER CHRONLOGICAL SPLIT
+#do 80/20 time ordered split | TR = FIRST 80% TE = LAST 20% 
 def load_split_or_fallback():
     if os.path.exists(train_csv) and os.path.exists(test_csv):
         tr = pd.read_csv(train_csv, low_memory=False)
@@ -184,6 +169,10 @@ def load_split_or_fallback():
     return tr, te, "fallback"
 
 def build_arrays(tr_df, te_df, target):#1. select featuers with _select_feats downcast feauters + target to flaot 32 3. fits scales on train only (xsc = standard scaler(), ys = MinMaxScaler())
+    #1. Standadize x: help GRU trian stably 
+    #2. MinMax y: keeps target in compact range: easy to invert later 
+    #3. fit on trian only: prevent test set leakage 
+    #4. float32 everywhere: faster and smaller, matches toch tensors 
     feats = _select_feats(tr_df, target)
     cols = feats + [target]
     tr_df = _downcast(tr_df, cols)
@@ -211,7 +200,7 @@ def run_one(tr_df, te_df, target):#training loop (per target) |1. build array & 
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     best_val = float("inf"); best = None
-#test evalation and plotting 
+#test evalation and plotting
     pbar = tqdm(range(1, epochs+1), desc=f"[{target}] epochs", ncols=110)
     for _ in pbar:
         model.train()
